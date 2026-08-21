@@ -41,13 +41,12 @@ class MonitorWebsiteBatchJob implements ShouldQueue
             return;
         }
 
-        $responses = Http::pool(fn(Pool $pool) => $websites
-            ->map(fn(Website $website) => $pool
-                ->as((string)$website->id)
+        $responses = Http::pool(fn (Pool $pool) => $websites
+            ->map(fn (Website $website) => $pool
+                ->as((string) $website->id)
                 ->timeout(10)
-                ->get($website->url)
-                ->all())
-        );
+                ->get($website->url))
+            ->all());
 
         foreach ($websites as $website) {
             $this->record($website, $responses[(string)$website->id] ?? null);
@@ -67,11 +66,30 @@ class MonitorWebsiteBatchJob implements ShouldQueue
             'last_checked_at' => now(),
         ])->save();
 
-        // Sending email only when website status transition from "Up" to "Down"
+        // Sending email only when website status transition to "Down"
         if ($current === WebsiteStatusEnum::DOWN && $previous !== WebsiteStatusEnum::DOWN) {
-            Mail::raw('website is down', function ($message) use ($website) {
-                $message->to($website->client->email);
+            $this->notifyClient($website);
+        }
+    }
+
+    /**
+     * Alert the owning client that the website is unreachable.
+     *
+     * A mail failure must not fail the whole batch, so it is logged and swallowed.
+     */
+    private function notifyClient(Website $website): void
+    {
+        $email = $website->client?->email;
+
+        try {
+            Mail::send('emails.website-down', ['website' => $website], function ($message) use ($website, $email) {
+                $message->to($email)->subject("{$website->url} is down!");
             });
+        } catch (Throwable $exception) {
+            Log::error('Failed to send website down alert', [
+                'website_id' => $website->id,
+                'exception' => $exception->getMessage(),
+            ]);
         }
     }
 
