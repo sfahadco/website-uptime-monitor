@@ -56,7 +56,6 @@ services:
   mysql:
     image: mysql:8.4
     container_name: uptime-mysql
-    command: --default-authentication-plugin=caching_sha2_password
     environment:
       MYSQL_ROOT_PASSWORD: ${DB_ROOT_PASSWORD:-root}
       MYSQL_DATABASE: ${DB_DATABASE:-uptime_monitor}
