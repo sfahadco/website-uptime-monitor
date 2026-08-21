@@ -8,6 +8,7 @@ use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Mail;
 use Throwable;
 
 class MonitorWebsiteBatchJob implements ShouldQueue
@@ -38,14 +39,21 @@ class MonitorWebsiteBatchJob implements ShouldQueue
         }
 
         foreach ($websites as $website) {
-            $response = Http::timeout(config(10))->get($website->url);
+            $response = Http::timeout(10)->get($website->url);
 
             if ($response->successful()) {
                 $website->status = WebsiteStatusEnum::UP;
-                $website->lastCheckedAt = now();
+                $website->last_checked_at = now();
                 $website->save();
             } else {
-                // Todo: send alert
+                //Todo: use email template instead of string
+                // Mail::to($website->client->email)->send();
+                Mail::raw('website is down', function ($message) use ($website) {
+                    $message->to($website->client->email);
+                });
+                $website->status = WebsiteStatusEnum::DOWN;
+                $website->last_checked_at = now();
+                $website->save();
             }
         }
     }

@@ -1,0 +1,11 @@
+#!/usr/bin/env sh
+# Runs artisan inside the app container as www-data.
+#
+# The container's Apache master needs root to bind :80, so the image has no
+# USER directive and `docker compose exec` therefore defaults to root -- which
+# writes root-owned files into the bind-mounted source tree. www-data is
+# remapped to the host UID/GID in docker/php/Dockerfile, so running as that
+# user keeps generated files editable on the host.
+set -e
+cd "$(dirname "$0")/.."
+exec docker compose exec -u www-data app php artisan "$@"
