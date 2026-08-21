@@ -6,6 +6,9 @@ use App\Enums\WebsiteStatusEnum;
 use App\Models\Website;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
+use Illuminate\Http\Client\ConnectionException;
+use Illuminate\Http\Client\Pool;
+use Illuminate\Http\Client\Response;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Mail;
@@ -38,23 +41,37 @@ class MonitorWebsiteBatchJob implements ShouldQueue
             return;
         }
 
-        foreach ($websites as $website) {
-            $response = Http::timeout(10)->get($website->url);
+        $responses = Http::pool(fn(Pool $pool) => $websites
+            ->map(fn(Website $website) => $pool
+                ->as((string)$website->id)
+                ->timeout(10)
+                ->get($website->url)
+                ->all())
+        );
 
-            if ($response->successful()) {
-                $website->status = WebsiteStatusEnum::UP;
-                $website->last_checked_at = now();
-                $website->save();
-            } else {
-                //Todo: use email template instead of string
-                // Mail::to($website->client->email)->send();
-                Mail::raw('website is down', function ($message) use ($website) {
-                    $message->to($website->client->email);
-                });
-                $website->status = WebsiteStatusEnum::DOWN;
-                $website->last_checked_at = now();
-                $website->save();
-            }
+        foreach ($websites as $website) {
+            $this->record($website, $responses[(string)$website->id] ?? null);
+        }
+    }
+
+    private function record(Website $website, Response|Throwable|null $result): void
+    {
+        $current = $result instanceof Response && $result->successful()
+            ? WebsiteStatusEnum::UP
+            : WebsiteStatusEnum::DOWN;
+
+        $previous = $website->status;
+
+        $website->forceFill([
+            'status' => $current,
+            'last_checked_at' => now(),
+        ])->save();
+
+        // Sending email only when website status transition from "Up" to "Down"
+        if ($current === WebsiteStatusEnum::DOWN && $previous !== WebsiteStatusEnum::DOWN) {
+            Mail::raw('website is down', function ($message) use ($website) {
+                $message->to($website->client->email);
+            });
         }
     }
 
