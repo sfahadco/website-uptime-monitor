@@ -16,15 +16,15 @@ class MonitoringSeeder extends Seeder
             'alice@example.com' => [
                 'https://laravel.com',
                 'https://github.com',
-                'https://this-domain-should-not-resolve-xyz.com',  // triggers a down alert
+                'https://this-domain-should-not-resolve-xyz.com',
             ],
             'bob@example.com' => [
                 'https://vuejs.org',
-                'https://httpstat.us',                          // returns an error
+                'https://httpstat.us',
             ],
             'john@example.com' => [
                 'https://mailpit.axllent.org',
-                'https://invalid.website',                          // returns an error
+                'https://invalid.website',
             ],
         ];
 

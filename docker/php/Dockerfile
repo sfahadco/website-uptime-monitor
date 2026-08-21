@@ -24,6 +24,11 @@ RUN docker-php-ext-install -j"$(nproc)" \
 RUN pecl install redis \
     && docker-php-ext-enable redis
 
+# Step debugging from the IDE. Left inert by xdebug.mode=off in php.ini -- the
+# XDEBUG_MODE env var in docker-compose.yml turns it on for a run.
+RUN pecl install xdebug \
+    && docker-php-ext-enable xdebug
+
 RUN a2enmod rewrite headers
 
 COPY docker/apache/vhost.conf /etc/apache2/sites-available/000-default.conf
