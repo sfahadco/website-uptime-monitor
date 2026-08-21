@@ -9,7 +9,7 @@ use Illuminate\Http\Request;
 
 class ClientController extends Controller
 {
-    public function __construct(private ClientRepository $clientRepository)
+    public function __construct(private readonly ClientRepository $clientRepository)
     {
 
     }

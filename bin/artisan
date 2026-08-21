@@ -6,6 +6,12 @@
 # writes root-owned files into the bind-mounted source tree. www-data is
 # remapped to the host UID/GID in docker/php/Dockerfile, so running as that
 # user keeps generated files editable on the host.
+#
+# XDEBUG_TRIGGER is forwarded when set on the host, so
+# `XDEBUG_TRIGGER=1 ./bin/artisan tinker` breaks in PhpStorm. Unquoted on
+# purpose: it has to word-split into two arguments, or vanish entirely.
 set -e
 cd "$(dirname "$0")/.."
-exec docker compose exec -u www-data app php artisan "$@"
+exec docker compose exec -u www-data \
+    ${XDEBUG_TRIGGER:+-e XDEBUG_TRIGGER=1} \
+    app php artisan "$@"

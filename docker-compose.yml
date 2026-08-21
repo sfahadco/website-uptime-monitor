@@ -14,6 +14,16 @@ x-app: &app
   # No env_file: `.` is bind-mounted, so Laravel reads .env off disk. Injecting
   # it into the process environment instead makes $_SERVER outrank phpunit.xml,
   # which silently points the test suite at the dev MySQL database.
+  #
+  # These two are safe to inject: neither is a Laravel config key, so nothing
+  # in config/ is shadowed.
+  environment:
+    XDEBUG_MODE: ${XDEBUG_MODE:-debug}
+    PHP_IDE_CONFIG: serverName=uptime-monitor
+  # Linux has no host.docker.internal of its own; Xdebug needs it to call back
+  # out to PhpStorm on the host.
+  extra_hosts:
+    - "host.docker.internal:host-gateway"
   networks:
     - uptime
 
