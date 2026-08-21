@@ -13,6 +13,7 @@ class ClientRepository
     public function get(array $payload): Collection
     {
         return Client::query()
+            ->select(['id', 'name', 'email'])
             ->when($payload['text_search'] ?? null, function (Builder $query, string $search) {
                 $term = '%' . $search . '%';
 
@@ -27,6 +28,8 @@ class ClientRepository
 
     public function getWebsites(Client $client): Collection
     {
-        return $client->websites()->get();
+        return $client->websites()
+            ->select(['id', 'url'])
+            ->get();
     }
 }
