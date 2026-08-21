@@ -3,6 +3,7 @@
 namespace App\Jobs;
 
 use App\Enums\WebsiteStatusEnum;
+use App\Mail\WebsiteDownEmail;
 use App\Models\Website;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
@@ -82,9 +83,7 @@ class MonitorWebsiteBatchJob implements ShouldQueue
         $email = $website->client?->email;
 
         try {
-            Mail::send('emails.website-down', ['website' => $website], function ($message) use ($website, $email) {
-                $message->to($email)->subject("{$website->url} is down!");
-            });
+            Mail::to($email)->queue(new WebsiteDownEmail($website));
         } catch (Throwable $exception) {
             Log::error('Failed to send website down alert', [
                 'website_id' => $website->id,
