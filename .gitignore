@@ -14,6 +14,7 @@
 
 # Pest / PHPUnit run cache
 /.phpunit.cache
+.phpunit.result.cache
 
 # Coverage reports
 /coverage
