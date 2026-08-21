@@ -7,7 +7,6 @@ use App\Mail\WebsiteDownEmail;
 use App\Models\Website;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
-use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Http\Client\Pool;
 use Illuminate\Http\Client\Response;
 use Illuminate\Support\Facades\Http;
@@ -22,6 +21,9 @@ class MonitorWebsiteBatchJob implements ShouldQueue
     public int $tries = 2;
 
     public int $timeout = 60;
+
+    // Mark job failed when job is timeout
+    public bool $failOnTimeout = true;
 
     /**
      * Create a new job instance.
@@ -45,7 +47,7 @@ class MonitorWebsiteBatchJob implements ShouldQueue
         $responses = Http::pool(fn (Pool $pool) => $websites
             ->map(fn (Website $website) => $pool
                 ->as((string) $website->id)
-                ->timeout(10)
+                ->timeout(config('monitoring.timeout'))
                 ->get($website->url))
             ->all());
 
