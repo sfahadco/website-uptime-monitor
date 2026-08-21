@@ -1,0 +1,108 @@
+name: uptime-monitor
+
+# Shared build config. app, queue and scheduler are the same image running
+# different commands.
+x-app: &app
+  build:
+    context: .
+    dockerfile: docker/php/Dockerfile
+    args:
+      UID: ${UID:-1000}
+      GID: ${GID:-1000}
+  volumes:
+    - .:/var/www/html
+  env_file:
+    - .env
+  networks:
+    - uptime
+
+services:
+  app:
+    <<: *app
+    container_name: uptime-app
+    ports:
+      - "${APP_PORT:-8000}:80"
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  # Processes the website-check jobs. Restarts on its own, which is what
+  # Supervisor does on the native LAMP box.
+  queue:
+    <<: *app
+    container_name: uptime-queue
+    user: www-data
+    command: php artisan queue:work --queue=alerts,monitoring,default --tries=3 --timeout=90 --sleep=1
+    restart: unless-stopped
+    depends_on:
+      app:
+        condition: service_started
+      redis:
+        condition: service_healthy
+
+  # Replaces the single cron entry used in production.
+  scheduler:
+    <<: *app
+    container_name: uptime-scheduler
+    user: www-data
+    command: php artisan schedule:work
+    restart: unless-stopped
+    depends_on:
+      app:
+        condition: service_started
+
+  mysql:
+    image: mysql:8.4
+    container_name: uptime-mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: ${DB_ROOT_PASSWORD:-root}
+      MYSQL_DATABASE: ${DB_DATABASE:-uptime_monitor}
+      MYSQL_USER: ${DB_USERNAME:-uptime}
+      MYSQL_PASSWORD: ${DB_PASSWORD:-secret}
+    ports:
+      - "${DB_PORT_HOST:-3306}:3306"
+    volumes:
+      - mysql-data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-uroot", "-p${DB_ROOT_PASSWORD:-root}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    networks:
+      - uptime
+
+  redis:
+    image: redis:8-alpine
+    container_name: uptime-redis
+    command: redis-server --appendonly yes
+    ports:
+      - "${REDIS_PORT_HOST:-6379}:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    networks:
+      - uptime
+
+  # Catches every outgoing email. UI at http://localhost:8025
+  mailpit:
+    image: axllent/mailpit:latest
+    container_name: uptime-mailpit
+    ports:
+      - "${MAILPIT_UI_PORT:-8025}:8025"
+      - "${MAILPIT_SMTP_PORT:-1025}:1025"
+    networks:
+      - uptime
+
+volumes:
+  mysql-data:
+  redis-data:
+
+networks:
+  uptime:
+    driver: bridge
