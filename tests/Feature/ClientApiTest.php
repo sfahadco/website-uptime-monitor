@@ -33,6 +33,40 @@ class ClientApiTest extends TestCase
         }
     }
 
+    public function test_filters_clients_by_name(): void
+    {
+        $match = Client::factory()->create(['name' => 'Acme Corporation']);
+        $other = Client::factory()->create(['name' => 'Globex Industries']);
+
+        $response = $this->getJson(route('clients.index', ['text_search' => 'Acme']));
+
+        $response->assertOk();
+
+        $this->assertSame(
+            [$match->name],
+            array_column($response->json(), 'name'),
+        );
+
+        $response->assertJsonMissing(['name' => $other->name]);
+    }
+
+    public function test_filters_clients_by_email(): void
+    {
+        $match = Client::factory()->create(['email' => 'billing@acme.test']);
+        $other = Client::factory()->create(['email' => 'ops@globex.test']);
+
+        $response = $this->getJson(route('clients.index', ['text_search' => 'acme.test']));
+
+        $response->assertOk();
+
+        $this->assertSame(
+            [$match->email],
+            array_column($response->json(), 'email'),
+        );
+
+        $response->assertJsonMissing(['email' => $other->email]);
+    }
+
     public function test_returns_only_the_requested_clients_websites(): void
     {
         $client = Client::factory()

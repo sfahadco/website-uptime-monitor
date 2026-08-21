@@ -13,25 +13,40 @@ class MonitoringSeeder extends Seeder
     public function run(): void
     {
         $data = [
-            'alice@example.com' => [
-                'https://laravel.com',
-                'https://github.com',
-                'https://this-domain-should-not-resolve-xyz.com',  // triggers a down alert
+            [
+                'name' => 'Alice Bennett',
+                'email' => 'alice@example.com',
+                'urls' => [
+                    'https://laravel.com',
+                    'https://github.com',
+                    'https://this-domain-should-not-resolve-xyz.com',
+                ],
             ],
-            'bob@example.com' => [
-                'https://vuejs.org',
-                'https://httpstat.us',                          // returns an error
+            [
+                'name' => 'Bob Carter',
+                'email' => 'bob@example.com',
+                'urls' => [
+                    'https://vuejs.org',
+                    'https://httpstat.us',
+                ],
             ],
-            'john@example.com' => [
-                'https://mailpit.axllent.org',
-                'https://invalid.website',                          // returns an error
+            [
+                'name' => 'John Dawson',
+                'email' => 'john@example.com',
+                'urls' => [
+                    'https://mailpit.axllent.org',
+                    'https://invalid.website',
+                ],
             ],
         ];
 
-        foreach ($data as $email => $urls) {
-            $client = Client::create(['email' => $email]);
+        foreach ($data as $row) {
+            $client = Client::create([
+                'name' => $row['name'],
+                'email' => $row['email'],
+            ]);
 
-            foreach ($urls as $url) {
+            foreach ($row['urls'] as $url) {
                 $client->websites()->create(['url' => $url]);
             }
         }

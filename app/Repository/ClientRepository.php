@@ -3,19 +3,26 @@
 namespace App\Repository;
 
 use App\Models\Client;
+use Illuminate\Contracts\Database\Query\Builder;
 use Illuminate\Database\Eloquent\Collection;
 
 class ClientRepository
 {
-    public function get($payload): Collection
+    private const int SEARCH_LIMIT = 10;
+
+    public function get(array $payload): Collection
     {
-        $query = Client::query();
+        return Client::query()
+            ->when($payload['text_search'] ?? null, function (Builder $query, string $search) {
+                $term = '%' . $search . '%';
 
-        $query->when($payload['text_search'] ?? null, function ($q, $search) {
-            return $q->where('email', 'like', '%' . $search . '%');
-        });
-
-        return $query->limit(10)->get();
+                $query->where(function (Builder $query) use ($term) {
+                    $query->where('name', 'like', $term)
+                        ->orWhere('email', 'like', $term);
+                });
+            })
+            ->limit(self::SEARCH_LIMIT)
+            ->get();
     }
 
     public function getWebsites(Client $client): Collection
