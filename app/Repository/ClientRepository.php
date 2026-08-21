@@ -13,14 +13,9 @@ class ClientRepository
     public function get(array $payload): Collection
     {
         return Client::query()
-            ->select(['id', 'name', 'email'])
+            ->select(['id', 'email'])
             ->when($payload['text_search'] ?? null, function (Builder $query, string $search) {
-                $term = '%' . $search . '%';
-
-                $query->where(function (Builder $query) use ($term) {
-                    $query->where('name', 'like', $term)
-                        ->orWhere('email', 'like', $term);
-                });
+                $query->where('email', 'like', '%' . $search . '%');
             })
             ->limit(self::SEARCH_LIMIT)
             ->get();
