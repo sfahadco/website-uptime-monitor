@@ -3,6 +3,7 @@
 namespace Tests\Feature;
 
 use App\Models\Client;
+use App\Models\Website;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Tests\TestCase;
 
@@ -14,13 +15,18 @@ class ClientApiTest extends TestCase
     {
         $clients = Client::factory()->count(3)->create();
 
-        $response = $this->getJson('/api/clients');
+        $response = $this->getJson(route('clients.index'));
 
-        $response->assertOk()
-            ->assertJsonCount(3, 'data')
-            ->assertJsonStructure([
-                'data' => [['id', 'email']],
-            ]);
+        $response->assertOk();
+
+        $content = $response->json();
+
+        $this->assertCount(3, $content);
+
+        $this->assertEqualsCanonicalizing(
+            $clients->pluck('email')->all(),
+            array_column($content, 'email'),
+        );
 
         foreach ($clients as $client) {
             $response->assertJsonFragment(['email' => $client->email]);
@@ -37,11 +43,15 @@ class ClientApiTest extends TestCase
             ->has(Website::factory()->count(2))
             ->create();
 
-        $response = $this->getJson("/api/clients/{$client->id}/websites");
+        $response = $this->getJson(route('clients.show', ['client' => $client]));
 
-        $response->assertOk()->assertJsonCount(3, 'data');
+        $response->assertOk();
 
-        $returned = collect($response->json('data'))->pluck('url');
+        $content = $response->json();
+
+        $this->assertCount(3, $content);
+
+        $returned = collect($content)->pluck('url');
 
         $this->assertEqualsCanonicalizing(
             $client->websites->pluck('url')->all(),
@@ -55,8 +65,8 @@ class ClientApiTest extends TestCase
 
     public function test_returns_404_for_an_unknown_client(): void
     {
-        $id = Client::factory()->create()->id + 1;
+        $response = $this->getJson(route('clients.show', ['client' => 999]));
 
-        $this->getJson("/api/clients/{$id}/websites")->assertNotFound();
+        $response->assertNotFound();
     }
 }

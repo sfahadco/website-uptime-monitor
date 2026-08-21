@@ -3,7 +3,7 @@
 namespace App\Http\Controllers;
 
 use App\Models\Client;
-use ClientRepository;
+use App\Repository\ClientRepository;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 
@@ -26,8 +26,8 @@ class ClientController extends Controller
 
     public function show(Client $client): JsonResponse
     {
-        $clientData = $this->clientRepository->findByClient($client);
+        $websites = $this->clientRepository->getWebsites($client);
 
-        return response()->json($clientData);
+        return response()->json($websites);
     }
 }
