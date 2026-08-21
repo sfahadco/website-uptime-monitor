@@ -1,0 +1,9 @@
+#!/usr/bin/env sh
+# Opens a shell inside the app container as www-data.
+#
+# `docker compose exec app bash` gives a ROOT shell, and anything generated from
+# it (artisan make:*, composer, npm) lands root-owned in the bind-mounted source
+# tree. Use this instead whenever you want to work from inside the container.
+set -e
+cd "$(dirname "$0")/.."
+exec docker compose exec -u www-data app bash "$@"
