@@ -11,10 +11,10 @@
 
 # Environment - .env.example is committed in its place
 .env
-.env.testing
 
 # Pest / PHPUnit run cache
 /.phpunit.cache
+.phpunit.result.cache
 
 # Coverage reports
 /coverage
