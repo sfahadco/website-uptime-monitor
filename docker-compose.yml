@@ -34,7 +34,7 @@ services:
     <<: *app
     container_name: uptime-queue
     user: www-data
-    command: php artisan queue:work --queue=alerts,monitoring,default --tries=3 --timeout=90 --sleep=1
+    command: php artisan queue:work --queue=alerts,monitoring,default --tries=2 --timeout=60 --sleep=1
     restart: unless-stopped
     depends_on:
       app:
