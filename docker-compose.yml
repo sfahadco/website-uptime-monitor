@@ -11,8 +11,9 @@ x-app: &app
       GID: ${GID:-1000}
   volumes:
     - .:/var/www/html
-  env_file:
-    - .env
+  # No env_file: `.` is bind-mounted, so Laravel reads .env off disk. Injecting
+  # it into the process environment instead makes $_SERVER outrank phpunit.xml,
+  # which silently points the test suite at the dev MySQL database.
   networks:
     - uptime
 
