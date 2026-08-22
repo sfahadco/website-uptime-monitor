@@ -51,10 +51,13 @@ A pass over the full seed data takes a minute or two on one worker. Most of the
 seeded hosts will never resolve, and those failures are what produce the alert
 emails in Mailpit.
 
-> **Note:** the dashboard lists each client's websites but does not yet display
-> their up/down status -- `/api/clients/{client}/websites` returns only `id` and
-> `url`. The statuses are recorded correctly in the database and can be seen
-> with `./bin/artisan tinker` or in Mailpit's alerts.
+> **Scope note:** the dashboard does not surface up/down status, by choice. The
+> brief specifies one screen -- a client selector, a bulleted list of that
+> client's website links, and a confirmation dialog -- so
+> `/api/clients/{client}/websites` returns `id` and `url` and nothing more.
+> Statuses are recorded on every pass and can be read with `./bin/artisan
+> tinker` or seen in the Mailpit alerts. Putting them on the dashboard is the
+> first thing this would grow, but it is outside the MVP.
 
 ## What you get
 
@@ -117,7 +120,7 @@ neither a full response nor a `<select>` of every option is workable:
 `/api/clients/{client}/websites` is deliberately *not* paginated -- the brief
 says a client has up to ten websites, so the list is short. Note that nothing in
 the schema enforces that ten; it is a product rule, not a constraint. Neither
-endpoint returns the monitored `status` -- see the note above.
+endpoint returns the monitored `status` -- see the scope note above.
 
 ## Tests
 
