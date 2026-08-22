@@ -114,8 +114,9 @@ neither a full response nor a `<select>` of every option is workable:
 | `page` | `1` | page number |
 | `per_page` | `50` | rows per page, capped at 100 |
 
-`/api/clients/{client}/websites` is deliberately *not* paginated -- a client is
-capped at ten websites, so the response is bounded by the data model. Neither
+`/api/clients/{client}/websites` is deliberately *not* paginated -- the brief
+says a client has up to ten websites, so the list is short. Note that nothing in
+the schema enforces that ten; it is a product rule, not a constraint. Neither
 endpoint returns the monitored `status` -- see the note above.
 
 ## Tests
@@ -158,6 +159,7 @@ knowing:
 | `MONITOR_TIMEOUT` | `10` | seconds before a check counts as down |
 | `MONITOR_BATCH_SIZE` | `50` | websites checked concurrently per queued job |
 | `MONITOR_JOB_TIMEOUT` | `120` | seconds a batch job may run before it is killed |
+| `REDIS_QUEUE_RETRY_AFTER` | `180` | seconds before an unfinished job is retried; must exceed the job timeout |
 | `MONITOR_SEED_CLIENTS` | `300` | generated clients the seeder creates |
 | `MONITOR_SEED_MAX_WEBSITES` | `10` | most websites any generated client gets |
 | `APP_PORT` | `8000` | host port for the dashboard |

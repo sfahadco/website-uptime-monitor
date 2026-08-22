@@ -14,7 +14,7 @@ the box is packaged, not a change to the architecture. Nothing in `app/`,
 `config/` or `routes/` knows it is in a container, so the same code drops onto
 a plain LAMP server unchanged.
 
-It is packaged this way because the application needs PHP 8.3 or newer, plus
+It is packaged this way because the application needs PHP 8.4.1 or newer, plus
 Redis and an SMTP catcher, and asking a reviewer to install all of that by hand
 on whatever machine they happen to use is slow and easy to get wrong. The brief
 asks that the project run "from a clean environment". With Docker that is
@@ -111,7 +111,8 @@ live service.
 not. PHPUnit puts its `<env>` entries into the process environment before
 Laravel boots, and Laravel will not overwrite an existing environment variable
 -- so `phpunit.xml` wins for the keys it lists, and `.env.testing` supplies the
-rest (`APP_KEY`, `MAIL_FROM_ADDRESS`, `MONITOR_TIMEOUT`, `MONITOR_BATCH_SIZE`).
+rest (`APP_KEY`, `MAIL_FROM_ADDRESS`, `MONITOR_TIMEOUT`, `MONITOR_BATCH_SIZE`,
+`MONITOR_JOB_TIMEOUT`).
 Two layers, both pointing the same way.
 
 `.env.testing` is committed, `APP_KEY` included. It is not a secret: it exists
@@ -190,10 +191,10 @@ abort the rest of its batch -- every site in the batch is still recorded.
 
 ## Sizing a cycle
 
-`timeout`, `batch_size` and `job_timeout` in `config/monitoring.php` are three
-faces of one calculation, and changing any of them in isolation is how you get
-jobs killed mid-flight or cycles that overlap. The target scale is the brief's:
-hundreds of clients at up to ten websites each, so roughly 1,650 websites.
+Four settings are really one calculation, and changing one alone is how you get
+jobs killed mid-flight, cycles that overlap, or sites checked twice. The target
+scale is the brief's: hundreds of clients at up to ten websites each, so 1,657
+websites with the seed data.
 
 The chain is:
 
@@ -201,17 +202,23 @@ The chain is:
   concurrently, so 50 sites at a 10-second timeout is ~10 seconds of wall clock
   in the worst case where every one of them hangs, not 500.
 - **`job_timeout` (120s) must clear that with room to spare.** It covers the
-  10-second tail plus connection setup, the pool's own overhead and the status
-  writes. 60 seconds would have worked too; 120 is deliberate slack, because a
-  job killed at the timeout records *nothing* and loses the whole batch.
-- **The cycle must fit in fifteen minutes.** 1,650 websites at 50 per batch is
-  34 jobs. One worker processing them back to back at the ~10-second worst case
-  is ~6 minutes -- comfortably inside the window, with the margin absorbing
-  slower checks and queue latency.
+  10-second tail plus connection setup, the pool's overhead and the status
+  writes. 60 would have worked; 120 is deliberate slack, because a job killed at
+  the timeout records *nothing* and loses the whole batch.
+- **The queue's `retry_after` (180s) must be higher than `job_timeout`.** This is
+  the one that bites. If a job is still running when `retry_after` passes, Redis
+  hands it to a second worker and every site in the batch is checked twice --
+  and a flapping site can then send two alerts. It lives in `config/queue.php`,
+  not `config/monitoring.php`, which is exactly why it is easy to miss when
+  raising the job timeout.
+- **The cycle must fit in fifteen minutes.** 1,657 websites at 50 per batch is
+  34 jobs. One worker running them back to back at the ~10-second worst case is
+  ~6 minutes -- inside the window, with margin for slower checks and queue
+  latency.
 
-The worst case is the one worth stating plainly: it assumes *every* site hangs
-until timeout. Real cycles are far quicker, because responsive sites answer in
-milliseconds and unresolvable ones fail on DNS almost as fast.
+That worst case assumes *every* site hangs until timeout. Real cycles are much
+quicker: live sites answer in milliseconds and dead ones fail on DNS about as
+fast. A full seeded cycle measures around 40-90 seconds on one worker.
 
 Where it stops fitting: at roughly 4,500 websites a single worker's worst case
 crosses fifteen minutes, `withoutOverlapping()` starts skipping cycles, and the
@@ -285,8 +292,13 @@ The query orders by `email` -- pagination is only coherent over a total, stable
 sort, and `email` is unique so it makes one on its own.
 
 `GET /api/clients/{client}/websites` is deliberately *not* paginated. The brief
-caps a client at ten websites, so that response is bounded by the data model
-itself and a page size would be ceremony around a list that cannot grow.
+says a client has up to ten websites, so the list is short and a page size would
+be ceremony around it.
+
+Worth being clear: nothing enforces that ten. There is no check constraint and
+no validation -- only the seeder sticks to it. So this is a bet on the product
+rule, not a guarantee from the schema. If clients ever get hundreds of sites,
+this endpoint needs paginating too.
 
 ---
 
@@ -313,7 +325,7 @@ display value for the current selection -- which is not a job the parent's
 search term should have. The parent still owns the fetching; the component only
 emits what was typed.
 
-The cost is roughly eighty lines of behaviour that a native element would have
+The cost is about a hundred lines of behaviour that a native element would have
 given for free, and a keyboard and screen-reader surface that is now this
 project's problem rather than the browser's. A headless combobox library would
 have covered it, but for one control on one screen it is not worth a dependency.
@@ -324,8 +336,8 @@ have covered it, but for one control on one screen it is not worth a dependency.
 
 The spec says an email goes out "when a website is detected as down", which
 read literally means every check that finds a site unreachable. It does not:
-`MonitorWebsiteBatchJob::record()` sends only when the status *changes* into
-down (`$current === DOWN && $previous !== DOWN`).
+`MonitorWebsiteBatchJob` sends only when the status *changes* into down. The
+test is `WebsiteStatusEnum::isNewOutageFrom()` -- now DOWN, previously not.
 
 The scheduler runs `monitor:dispatch` every fifteen minutes, so the literal
 reading produces 96 identical emails per site per day for an outage nobody has
@@ -362,7 +374,7 @@ server would make the checks themselves slow -- the one thing that has to finish
 inside fifteen minutes. Queued, the job hands the email over and immediately
 carries on with the next website.
 
-The `try/catch` is there because a batch checks up to 25 websites belonging to
+The `try/catch` is there because a batch checks up to 50 websites belonging to
 different clients. One malformed address, or a mail service that is briefly
 down, would otherwise throw and abandon the rest of the batch -- so a mail
 problem would turn into a monitoring problem. Swallowing it means the failure is
