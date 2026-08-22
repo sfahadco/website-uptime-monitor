@@ -2,6 +2,7 @@
 
 namespace Database\Seeders;
 
+use App\Enums\WebsiteStatusEnum;
 use App\Models\Client;
 use App\Models\Website;
 use Illuminate\Database\Seeder;
@@ -109,19 +110,24 @@ class MonitoringSeeder extends Seeder
                     $rows[] = [
                         'client_id' => $clientId,
                         // .example.com is reserved by RFC 2606, so these hosts
-                        // can never resolve to somebody's real server. The
-                        // monitor will mark every one of them down, which is
-                        // the intended outcome: nothing here should generate
-                        // traffic to a third party.
+                        // can never resolve to somebody's real server. Nothing
+                        // here generates traffic to a third party.
                         'url' => sprintf('https://client-%04d-site-%02d.example.com', $index, $n),
+                        // Seeded down rather than unknown, because down is what
+                        // they are: the host cannot resolve, by construction.
+                        // It also keeps the first cycle quiet. Alerts fire on a
+                        // transition *into* down, so seeding these as unknown
+                        // would make cycle one an unknown -> down transition for
+                        // every row and queue ~1,650 emails at once.
+                        'status' => WebsiteStatusEnum::DOWN->value,
                         'created_at' => $now,
                         'updated_at' => $now,
                     ];
                 }
             }
 
-            // status and last_checked_at are left out so the column defaults
-            // apply -- these sites are genuinely unknown until a cycle runs.
+            // last_checked_at stays null: the status is known from the start,
+            // but nothing has actually checked these yet.
             foreach (array_chunk($rows, self::WEBSITE_CHUNK) as $batch) {
                 Website::insertOrIgnore($batch);
             }

@@ -76,7 +76,9 @@ mix of two sources:
 - **300 generated clients** with one to ten websites each, under the reserved
   `.example.com` domain so nothing can ever point a check at a real server.
   These exist to put realistic volume behind the dispatcher, the batch jobs and
-  the paginated client list.
+  the paginated client list. They are seeded already `down`, which is both true
+  and quiet: alerts fire on a transition *into* down, so the first cycle
+  confirms them rather than mailing you about all 1,650.
 
 Re-seeding is a no-op: every generated row is derived from its client index, so
 `./bin/setup` can run repeatedly without piling up duplicate clients. Set

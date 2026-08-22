@@ -456,9 +456,27 @@ three hundred clients every time anyone ran setup twice.
 
 **The generated hosts live under `.example.com`,** which RFC 2606 reserves.
 Nothing the seeder invents can resolve to somebody's real server, so a seeded
-database can never point 1,650 concurrent checks at a third party. The
-consequence is that the monitor marks every generated site down, which is the
-intended outcome rather than a defect.
+database can never point 1,650 concurrent checks at a third party.
+
+**And they are seeded `down`, not `unknown`.** Partly because `down` is simply
+true -- those hosts cannot resolve, by construction -- but mostly because
+alerting keys off a transition *into* down. Seeded as `unknown`, the first cycle
+would be an `unknown -> down` transition for all 1,650 rows and would queue that
+many alert emails at once, burying the handful of real ones in Mailpit. Seeded
+`down`, the first cycle confirms rather than transitions and sends nothing. The
+demo clients deliberately keep the default, so their genuine outages still
+produce a genuine alert.
+
+`last_checked_at` stays null on the generated rows: their status is known from
+the start, but nothing has actually checked them.
+
+The alternative considered was pointing the generated sites at real hosts.
+Public testing endpoints do exist for this (`httpstat.us`, `httpbin.org`), but
+1,650 sites on a fifteen-minute cycle is 6,600 requests an hour to somebody
+else's free service -- which is abuse, and would be rate-limited into producing
+fake failures anyway. Doing it properly means self-hosting the targets, e.g. a
+`go-httpbin` container on the compose network. That is a real improvement and a
+larger change than the seeder; it is not done here.
 
 **The writes are bulk `insertOrIgnore` in chunks,** not `firstOrCreate` per row.
 Row-at-a-time would be some 1,950 round trips; chunked it is a handful, and the
