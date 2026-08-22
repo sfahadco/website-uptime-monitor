@@ -4,7 +4,7 @@ Periodically checks a list of client websites, records whether each one is up or
 down, and emails the client when a site goes down. A small Vue dashboard shows
 the current state.
 
-Built with Laravel 12 (PHP 8.5), Vue 3, MySQL 8.4 and Redis 8, all in Docker.
+Built with Laravel 13 (PHP 8.5), Vue 3, MySQL 8.4 and Redis 8, all in Docker.
 
 ## Quickstart
 
@@ -87,9 +87,12 @@ they ride a separate `alerts` queue that is drained ahead of `monitoring`.
 
 | Method | Path | Returns |
 |---|---|---|
-| `GET` | `/api/clients` | all clients |
-| `GET` | `/api/clients/{client}/websites` | that client's websites and statuses |
+| `GET` | `/api/clients` | every client, as `id` and `email` |
+| `GET` | `/api/clients/{client}/websites` | that client's websites, as `id` and `url` |
 | `GET` | `/up` | Laravel health check |
+
+Both list endpoints are unpaginated, which suits the select-one-client UI at this
+scale. Neither returns the monitored `status` -- see the note above.
 
 ## Tests
 
