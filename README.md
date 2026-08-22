@@ -18,7 +18,7 @@ and MySQL all run in containers; nothing else is installed on your machine.
 missing if either is absent.
 
 ```bash
-git clone git@github.com:sfahadco/website-uptime-monitor.git && cd website-uptime-monitor
+git clone https://github.com/sfahadco/website-uptime-monitor.git && cd website-uptime-monitor
 ./bin/setup
 ```
 
