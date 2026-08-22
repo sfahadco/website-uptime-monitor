@@ -1,0 +1,273 @@
+#!/usr/bin/env bash
+# One-shot bring-up for reviewers: clone, run this, open the browser.
+#
+# Docker is the only prerequisite. PHP, Composer, Node and MySQL all run inside
+# containers -- nothing is installed on the host.
+#
+#   ./bin/setup            bring everything up (safe to re-run)
+#   ./bin/setup --fresh    same, but wipe the database and re-seed first
+#   ./bin/setup --down     stop everything and remove the volumes
+#
+# Every step is idempotent, so a half-finished run can simply be repeated.
+set -euo pipefail
+
+cd "$(dirname "$0")/.."
+
+# ---------------------------------------------------------------------------
+# Output helpers
+# ---------------------------------------------------------------------------
+
+if [ -t 1 ]; then
+    BOLD=$(printf '\033[1m'); DIM=$(printf '\033[2m')
+    RED=$(printf '\033[31m'); GREEN=$(printf '\033[32m'); YELLOW=$(printf '\033[33m')
+    RESET=$(printf '\033[0m')
+else
+    BOLD=''; DIM=''; RED=''; GREEN=''; YELLOW=''; RESET=''
+fi
+
+STEP=0
+TOTAL=6
+
+step() { STEP=$((STEP + 1)); printf '\n%s[%d/%d] %s%s\n' "$BOLD" "$STEP" "$TOTAL" "$1" "$RESET"; }
+info() { printf '      %s%s%s\n' "$DIM" "$1" "$RESET"; }
+warn() { printf '      %s! %s%s\n' "$YELLOW" "$1" "$RESET"; }
+die()  { printf '\n%serror:%s %s\n' "$RED" "$RESET" "$1" >&2; exit 1; }
+
+# Name the step that failed instead of dumping a bare non-zero exit.
+trap 'die "step $STEP failed. Fix the problem above and re-run ./bin/setup"' ERR
+
+# ---------------------------------------------------------------------------
+# Argument parsing
+# ---------------------------------------------------------------------------
+
+FRESH=0
+DOWN=0
+
+for arg in "$@"; do
+    case "$arg" in
+        --fresh) FRESH=1 ;;
+        --down)  DOWN=1 ;;
+        -h|--help)
+            sed -n '2,11p' "$0" | cut -c3-
+            exit 0
+            ;;
+        *) die "unknown option: $arg (try --help)" ;;
+    esac
+done
+
+# ---------------------------------------------------------------------------
+# Step 1 -- preflight
+# ---------------------------------------------------------------------------
+
+step "Checking prerequisites"
+
+command -v docker >/dev/null 2>&1 \
+    || die "docker is not installed -- see https://docs.docker.com/get-docker/"
+
+docker compose version >/dev/null 2>&1 \
+    || die "the docker compose plugin is missing (v2 required). 'docker-compose' v1 will not work."
+
+docker info >/dev/null 2>&1 \
+    || die "the docker daemon is not running -- start Docker and try again"
+
+info "docker $(docker version --format '{{.Server.Version}}' 2>/dev/null || echo '?'), compose $(docker compose version --short)"
+
+if [ "$DOWN" -eq 1 ]; then
+    printf '\n%sTearing everything down%s\n' "$BOLD" "$RESET"
+    docker compose down --volumes --remove-orphans
+    printf '\n%s✓%s Containers and volumes removed. Your .env and source tree are untouched.\n' "$GREEN" "$RESET"
+    exit 0
+fi
+
+# ---------------------------------------------------------------------------
+# Step 2 -- environment file
+# ---------------------------------------------------------------------------
+
+step "Preparing .env"
+
+if [ -f .env ]; then
+    info ".env already exists -- keeping your values"
+else
+    cp .env.example .env
+    info "created .env from .env.example"
+fi
+
+# An .env written against an earlier revision can be missing keys added since --
+# the published-ports block is the usual one. Copy across anything absent so the
+# file is complete, and never touch a key that is already there: .env holds a
+# real APP_KEY and whatever ports and credentials this machine needs, none of
+# which .env.example can supply. Overwriting the file wholesale would rotate the
+# app key, so it is only ever added to.
+backfilled=0
+for key in $(grep -oE '^[A-Z_][A-Z0-9_]*=' .env.example | tr -d '=' | awk '!seen[$0]++' || true); do
+    if ! grep -qE "^${key}=" .env; then
+        grep -m1 -E "^${key}=" .env.example >> .env
+        backfilled=$((backfilled + 1))
+    fi
+done
+
+[ "$backfilled" -eq 0 ] || info "added $backfilled missing key(s) from .env.example"
+
+# Rewrite a key in .env, appending it if absent. Done with awk rather than
+# `sed -i` because the in-place flag takes an argument on BSD/macOS sed and
+# none on GNU sed, and there is no spelling that works on both.
+set_env() {
+    local key=$1 value=$2
+    if grep -qE "^${key}=" .env; then
+        awk -v k="$key" -v v="$value" \
+            'BEGIN { FS = "=" } $1 == k { print k "=" v; next } { print $0 }' \
+            .env > .env.tmp && mv .env.tmp .env
+    else
+        printf '%s=%s\n' "$key" "$value" >> .env
+    fi
+}
+
+# www-data inside the container is remapped to these, so files written by
+# artisan/composer stay editable on the host. See docker/php/Dockerfile.
+set_env UID "$(id -u)"
+set_env GID "$(id -g)"
+info "container user pinned to $(id -u):$(id -g)"
+
+# Read the published ports back out -- the reviewer may have changed them.
+#
+# The trailing `|| true` is load-bearing. grep exits 1 when the key is absent,
+# `set -o pipefail` promotes that to the pipeline's status, and `set -e` then
+# kills the script on what is not an error at all: docker-compose.yml defaults
+# every one of these, so a missing key is perfectly valid.
+read_env() { grep -E "^$1=" .env | tail -1 | cut -d= -f2- | tr -d '"' || true; }
+
+APP_PORT=$(read_env APP_PORT); APP_PORT=${APP_PORT:-8000}
+MAILPIT_UI_PORT=$(read_env MAILPIT_UI_PORT); MAILPIT_UI_PORT=${MAILPIT_UI_PORT:-8025}
+
+# A port conflict surfaces three minutes into `up` as an opaque bind error, so
+# check first -- but only on a cold start, since on a re-run the ports are held
+# by this project's own containers.
+if [ -z "$(docker compose ps -q 2>/dev/null)" ]; then
+    port_busy() { (exec 3<>"/dev/tcp/127.0.0.1/$1") >/dev/null 2>&1; }
+
+    conflicts=0
+    for spec in "APP_PORT:$APP_PORT" \
+                "DB_PORT_HOST:$(read_env DB_PORT_HOST)" \
+                "REDIS_PORT_HOST:$(read_env REDIS_PORT_HOST)" \
+                "MAILPIT_UI_PORT:$MAILPIT_UI_PORT" \
+                "MAILPIT_SMTP_PORT:$(read_env MAILPIT_SMTP_PORT)"; do
+        var=${spec%%:*}; port=${spec#*:}
+        [ -n "$port" ] || continue
+        if port_busy "$port"; then
+            warn "port $port is already in use -- set $var to a free port in .env"
+            conflicts=1
+        fi
+    done
+
+    [ "$conflicts" -eq 0 ] || die "resolve the port conflicts above, then re-run ./bin/setup"
+fi
+
+# ---------------------------------------------------------------------------
+# Step 3 -- containers
+# ---------------------------------------------------------------------------
+
+step "Building and starting containers"
+info "first run pulls images and compiles PHP extensions -- expect a few minutes"
+
+docker compose up -d --build
+
+# `up -d` returns once mysql reports healthy, but the app container's Apache
+# may still be a moment behind. Give exec a few tries before giving up.
+for _ in $(seq 1 30); do
+    if docker compose exec -T app true >/dev/null 2>&1; then
+        break
+    fi
+    sleep 1
+done
+
+docker compose exec -T app true >/dev/null 2>&1 \
+    || die "the app container never became ready -- check 'docker compose logs app'"
+
+# Everything below runs as www-data, never root, so nothing lands in the
+# bind-mounted source tree owned by a user the host cannot edit.
+app() { docker compose exec -T -u www-data app "$@"; }
+
+# ---------------------------------------------------------------------------
+# Step 4 -- PHP dependencies and application key
+# ---------------------------------------------------------------------------
+
+step "Installing PHP dependencies"
+
+app composer install --no-interaction --prefer-dist
+
+if grep -qE '^APP_KEY=.+' .env; then
+    info "APP_KEY already set"
+else
+    app php artisan key:generate --no-interaction
+fi
+
+# ---------------------------------------------------------------------------
+# Step 5 -- database
+# ---------------------------------------------------------------------------
+
+step "Migrating and seeding the database"
+
+if [ "$FRESH" -eq 1 ]; then
+    app php artisan migrate:fresh --seed --force
+else
+    app php artisan migrate --force
+    app php artisan db:seed --force
+fi
+
+# ---------------------------------------------------------------------------
+# Step 6 -- frontend assets
+# ---------------------------------------------------------------------------
+
+step "Building frontend assets"
+
+# The PHP image has no Node, so the build runs in a throwaway container. This
+# keeps Docker the only thing a reviewer needs installed.
+#
+# node:22-bookworm-slim rather than -alpine: Vite's rollup dependency ships
+# platform-specific optional binaries, and a glibc image matches the committed
+# package-lock.json. HOME and the npm cache are pointed at /tmp because the
+# container runs as the host UID, which has no home directory inside it.
+node_run() {
+    docker run --rm \
+        -u "$(id -u):$(id -g)" \
+        -e HOME=/tmp \
+        -e npm_config_cache=/tmp/.npm \
+        -v "$PWD":/app \
+        -w /app \
+        node:22-bookworm-slim "$@"
+}
+
+if [ -d node_modules ] && [ "$FRESH" -eq 0 ]; then
+    info "node_modules present -- skipping install"
+else
+    info "running npm ci (slowest step, roughly a minute)"
+    node_run npm ci --no-audit --no-fund
+fi
+
+node_run npm run build
+
+# ---------------------------------------------------------------------------
+# Done
+# ---------------------------------------------------------------------------
+
+# The scheduler fires monitor:dispatch on a */15 cron -- :00/:15/:30/:45 on the
+# wall clock, not fifteen minutes from now. Nothing has been checked yet when
+# setup finishes, so point at the command that runs a pass on demand.
+cat <<EOF
+
+${GREEN}${BOLD}✓ Ready.${RESET}
+
+  Dashboard   ${BOLD}http://localhost:${APP_PORT}${RESET}
+  Mailpit     ${BOLD}http://localhost:${MAILPIT_UI_PORT}${RESET}   (every down-alert email lands here)
+
+  Nothing has been checked yet -- the scheduler runs on the quarter hour.
+  To watch a monitoring pass now:
+
+    ${BOLD}./bin/artisan monitor:dispatch${RESET}     ${DIM}queue a pass${RESET}
+    ${BOLD}docker compose logs -f queue${RESET}       ${DIM}watch it run${RESET}
+
+  ${DIM}Also useful:${RESET}
+    ./bin/artisan test                  ${DIM}run the test suite${RESET}
+    ./bin/setup --down                  ${DIM}tear it all down${RESET}
+
+EOF

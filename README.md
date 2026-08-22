@@ -1,58 +1,134 @@
-<p align="center"><a href="https://laravel.com" target="_blank"><img src="https://raw.githubusercontent.com/laravel/art/master/logo-lockup/5%20SVG/2%20CMYK/1%20Full%20Color/laravel-logolockup-cmyk-red.svg" width="400" alt="Laravel Logo"></a></p>
+# Uptime Monitor
 
-<p align="center">
-<a href="https://github.com/laravel/framework/actions"><img src="https://github.com/laravel/framework/workflows/tests/badge.svg" alt="Build Status"></a>
-<a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/dt/laravel/framework" alt="Total Downloads"></a>
-<a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/v/laravel/framework" alt="Latest Stable Version"></a>
-<a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/l/laravel/framework" alt="License"></a>
-</p>
+Periodically checks a list of client websites, records whether each one is up or
+down, and emails the client when a site goes down. A small Vue dashboard shows
+the current state.
 
-## About Laravel
+Built with Laravel 12 (PHP 8.5), Vue 3, MySQL 8.4 and Redis 8, all in Docker.
 
-Laravel is a web application framework with expressive, elegant syntax. We believe development must be an enjoyable and creative experience to be truly fulfilling. Laravel takes the pain out of development by easing common tasks used in many web projects, such as:
+## Quickstart
 
-- [Simple, fast routing engine](https://laravel.com/docs/routing).
-- [Powerful dependency injection container](https://laravel.com/docs/container).
-- Multiple back-ends for [session](https://laravel.com/docs/session) and [cache](https://laravel.com/docs/cache) storage.
-- Expressive, intuitive [database ORM](https://laravel.com/docs/eloquent).
-- Database agnostic [schema migrations](https://laravel.com/docs/migrations).
-- [Robust background job processing](https://laravel.com/docs/queues).
-- [Real-time event broadcasting](https://laravel.com/docs/broadcasting).
-
-Laravel is accessible, powerful, and provides tools required for large, robust applications.
-
-## Learning Laravel
-
-Laravel has the most extensive and thorough [documentation](https://laravel.com/docs) and video tutorial library of all modern web application frameworks, making it a breeze to get started with the framework.
-
-In addition, [Laracasts](https://laracasts.com) contains thousands of video tutorials on a range of topics including Laravel, modern PHP, unit testing, and JavaScript. Boost your skills by digging into our comprehensive video library.
-
-You can also watch bite-sized lessons with real-world projects on [Laravel Learn](https://laravel.com/learn), where you will be guided through building a Laravel application from scratch while learning PHP fundamentals.
-
-## Agentic Development
-
-Laravel's predictable structure and conventions make it ideal for AI coding agents like Claude Code, Cursor, and GitHub Copilot. Install [Laravel Boost](https://laravel.com/docs/ai) to supercharge your AI workflow:
+The only thing you need installed is **Docker** with the Compose v2 plugin.
+PHP, Composer, Node and MySQL all run in containers.
 
 ```bash
-composer require laravel/boost --dev
-
-php artisan boost:install
+git clone <repo-url> && cd website-uptime-monitor
+./bin/setup
 ```
 
-Boost provides your agent 15+ tools and skills that help agents build Laravel applications while following best practices.
+Then open **<http://localhost:8000>**.
 
-## Contributing
+The script takes a few minutes on a cold start -- it builds the PHP image,
+installs dependencies, migrates and seeds the database, and compiles the
+frontend. It is safe to re-run at any point.
 
-Thank you for considering contributing to the Laravel framework! The contribution guide can be found in the [Laravel documentation](https://laravel.com/docs/contributions).
+| | |
+|---|---|
+| `./bin/setup` | bring everything up (idempotent) |
+| `./bin/setup --fresh` | same, but wipe the database and re-seed |
+| `./bin/setup --down` | stop everything and remove the volumes |
 
-## Code of Conduct
+If a port is already taken, the script says which one and which variable in
+`.env` to change, before it builds anything.
 
-In order to ensure that the Laravel community is welcoming to all, please review and abide by the [Code of Conduct](https://laravel.com/docs/contributions#code-of-conduct).
+## Seeing the monitoring run
 
-## Security Vulnerabilities
+The scheduler queues a pass on the quarter hour (:00, :15, :30, :45). To run one
+straight away rather than waiting:
 
-If you discover a security vulnerability within Laravel, please send an e-mail to Taylor Otwell via [taylor@laravel.com](mailto:taylor@laravel.com). All security vulnerabilities will be promptly addressed.
+```bash
+./bin/artisan monitor:dispatch      # queue a pass now
+docker compose logs -f queue        # watch it run
+```
 
-## License
+A pass takes about ten seconds, because the seed data deliberately includes
+hosts that will never resolve. Those failures are what produce the alert emails
+in Mailpit.
 
-The Laravel framework is open-sourced software licensed under the [MIT license](https://opensource.org/licenses/MIT).
+> **Note:** the dashboard lists each client's websites but does not yet display
+> their up/down status -- `/api/clients/{client}/websites` returns only `id` and
+> `url`. The statuses are recorded correctly in the database and can be seen
+> with `./bin/artisan tinker` or in Mailpit's alerts.
+
+## What you get
+
+**<http://localhost:8000>** -- the dashboard. Pick a client to see the websites
+being monitored for them, and click one to open it after a confirmation prompt.
+
+**<http://localhost:8025>** -- [Mailpit](https://mailpit.axllent.org). Every
+outgoing email is caught here instead of being delivered, so you can read the
+down-alerts without configuring a mail provider.
+
+The seed data ([`MonitoringSeeder`](database/seeders/MonitoringSeeder.php)) sets
+up three clients with seven websites between them -- a deliberate mix of
+reachable hosts and hosts that will never resolve, so both the up and down paths
+are exercised on the first pass and at least one alert email lands in Mailpit.
+
+## How the monitoring works
+
+Three layers, described in full in [DECISIONS.md](DECISIONS.md#monitoring-runs-in-three-layers-scheduler-dispatcher-batched-jobs):
+
+1. The **scheduler** container runs `monitor:dispatch` every fifteen minutes.
+2. **`monitor:dispatch`** chunks the websites table and queues one
+   `MonitorWebsiteBatchJob` per batch. It performs no HTTP itself.
+3. The **queue** container runs the batches, checking each batch concurrently
+   with `Http::pool()` and writing the results back.
+
+Alerts go out only on a transition *into* down, not on every failed check, and
+they ride a separate `alerts` queue that is drained ahead of `monitoring`.
+
+## API
+
+| Method | Path | Returns |
+|---|---|---|
+| `GET` | `/api/clients` | all clients |
+| `GET` | `/api/clients/{client}/websites` | that client's websites and statuses |
+| `GET` | `/up` | Laravel health check |
+
+## Tests
+
+```bash
+./bin/artisan test
+```
+
+The suite runs against an in-memory SQLite database with the queue and mailer
+faked, so it needs no extra setup and cannot touch your development data or a
+live service -- see [DECISIONS.md](DECISIONS.md#envtesting-as-a-separate-file).
+
+## Working in the project
+
+`bin/artisan` and `bin/shell` run inside the app container as `www-data`, which
+is remapped to your host user so generated files stay editable. Use them rather
+than `docker compose exec`, which gives you a root shell and leaves root-owned
+files in the source tree.
+
+```bash
+./bin/artisan migrate            # any artisan command
+./bin/shell                      # a shell in the app container
+docker compose logs -f queue     # queue worker output
+docker compose restart queue     # after editing a Job class
+```
+
+That last one matters: queue workers hold the application in memory and will not
+pick up an edited job class until they are restarted.
+
+Frontend assets are built once by `bin/setup`. For live reloading while working
+on the Vue components, run Vite on the host with `npm run dev`.
+
+## Configuration
+
+`.env` is created from `.env.example` on first setup. The settings most worth
+knowing:
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `MONITOR_TIMEOUT` | `10` | seconds before a check counts as down |
+| `MONITOR_BATCH_SIZE` | `25` | websites checked per queued job |
+| `APP_PORT` | `8000` | host port for the dashboard |
+| `MAILPIT_UI_PORT` | `8025` | host port for Mailpit |
+
+## Design notes
+
+[DECISIONS.md](DECISIONS.md) records why the project is built the way it is --
+the container layout, the queue split, the alerting rule, the accepted
+limitations, and the trade-offs behind each.

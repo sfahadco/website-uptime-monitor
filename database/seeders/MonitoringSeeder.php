@@ -28,11 +28,14 @@ class MonitoringSeeder extends Seeder
             ],
         ];
 
+        // firstOrCreate rather than create: bin/setup re-seeds on every run, and
+        // both clients.email and (client_id, url) are unique, so a plain insert
+        // would fail the second time.
         foreach ($data as $email => $urls) {
-            $client = Client::create(['email' => $email]);
+            $client = Client::firstOrCreate(['email' => $email]);
 
             foreach ($urls as $url) {
-                $client->websites()->create(['url' => $url]);
+                $client->websites()->firstOrCreate(['url' => $url]);
             }
         }
     }

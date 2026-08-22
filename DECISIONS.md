@@ -278,3 +278,33 @@ override away, to fix what is really a wrong default one layer down. Config
 defaults are already how this project handles the same problem elsewhere --
 `config/monitoring.php` gives the spec's ten-second timeout as the default for
 `MONITOR_TIMEOUT` rather than relying on `.env` to carry it.
+
+---
+
+## `bin/setup` as the single entry point for a fresh clone
+
+The brief asks that the project run from a clean environment. `docker compose up
+-d` gets the containers running but not the application: `vendor/` and
+`node_modules/` are gitignored, `.env` does not exist, `APP_KEY` is empty, the
+database is unmigrated, and `public/build` has no compiled assets. That is six
+more commands, two of which have to run as the right user inside the right
+container, and one of which cannot run in any container at all because the PHP
+image has no Node.
+
+`bin/setup` is that sequence written down once. Docker stays the only
+prerequisite -- the asset build borrows a throwaway `node:22-bookworm-slim`
+container rather than asking for Node on the host, which keeps the promise made
+in "Why Docker containers" that versions are identical on every machine.
+
+Two details are worth knowing. It re-seeds on every run, which is why
+`MonitoringSeeder` uses `firstOrCreate` -- `clients.email` and
+`(client_id, url)` are both unique, so a plain insert would fail the second time
+round. And it checks the published ports before building anything, because a
+host that already has MySQL on 3306 is common and the alternative is an opaque
+bind error several minutes into the build.
+
+The cost is a script that duplicates knowledge already present in
+`docker-compose.yml` and `composer.json`, and that will drift if the setup steps
+change without it. It is worth that: the reviewer's first five minutes are the
+ones most likely to end in a wrong conclusion about the project.
+
