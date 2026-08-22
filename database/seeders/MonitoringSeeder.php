@@ -20,6 +20,8 @@ use Illuminate\Database\Seeder;
  */
 class MonitoringSeeder extends Seeder
 {
+    // Both kept well under SQLite's bind-parameter limit, so the seeder
+    // behaves the same in tests as it does against MySQL.
     private const CHUNK = 250;
 
     private const WEBSITE_CHUNK = 500;
@@ -99,6 +101,9 @@ class MonitoringSeeder extends Seeder
                 $emails,
             ));
 
+            // Read the ids back rather than trusting the insert: on a re-run
+            // most rows already existed and were ignored, so there are no new
+            // ids to collect.
             $clientIds = Client::query()->whereIn('email', $emails)->pluck('id', 'email');
 
             $rows = [];
@@ -113,12 +118,9 @@ class MonitoringSeeder extends Seeder
                         // can never resolve to somebody's real server. Nothing
                         // here generates traffic to a third party.
                         'url' => sprintf('https://client-%04d-site-%02d.example.com', $index, $n),
-                        // Seeded down rather than unknown, because down is what
-                        // they are: the host cannot resolve, by construction.
-                        // It also keeps the first cycle quiet. Alerts fire on a
-                        // transition *into* down, so seeding these as unknown
-                        // would make cycle one an unknown -> down transition for
-                        // every row and queue ~1,650 emails at once.
+                        // Down is simply true here, and it keeps the first
+                        // cycle quiet: alerts need a change into down, so
+                        // seeding these unknown would mail about all of them.
                         'status' => WebsiteStatusEnum::DOWN->value,
                         'created_at' => $now,
                         'updated_at' => $now,

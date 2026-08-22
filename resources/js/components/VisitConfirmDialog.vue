@@ -24,6 +24,7 @@ watch(
             dialog.close();
         }
     },
+    // 'post' so the DOM has rendered and the <dialog> ref actually exists.
     { flush: 'post' },
 );
 
@@ -40,12 +41,16 @@ function onDismiss() {
     dialogEl.value?.close();
 }
 
+// Every way of closing -- button, Esc, backdrop -- ends in the native `close`
+// event, so the parent gets told from one place.
 function onClose() {
     emit('close');
 }
 </script>
 
 <template>
+    <!-- click.self fires only on the dialog box itself, which is the backdrop:
+         clicks on the content inside bubble from a child and are ignored. -->
     <dialog
         ref="dialogEl"
         aria-labelledby="visit-dialog-title"

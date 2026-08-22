@@ -15,7 +15,8 @@ class ClientController extends Controller
     private const int DEFAULT_PER_PAGE = 50;
 
     /**
-     * Max size per page
+     * Max size per page. Without a cap a caller could ask for the whole table
+     * and undo the point of paginating.
      */
     private const int MAX_PER_PAGE = 100;
 
@@ -33,6 +34,8 @@ class ClientController extends Controller
             ($validated['per_page'] ?? self::DEFAULT_PER_PAGE),
         );
 
+        // `meta` carries the full total so the UI can say the list it is
+        // showing is not all of them.
         return response()->json([
             'data' => $clients->items(),
             'meta' => [

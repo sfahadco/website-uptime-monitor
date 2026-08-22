@@ -19,6 +19,8 @@ const websitesError = ref(null);
 
 const dialogTarget = ref(null);
 
+// Both lists guard against a slow reply overwriting a newer one: each request
+// takes an id, and only the newest id is allowed to write to the refs.
 let clientsRequestId = 0;
 let clientsController = null;
 let searchTimer = null;
@@ -105,6 +107,7 @@ function onSearchClients(term) {
 }
 
 function onRetryClients() {
+    // Drop any pending debounce, or it fires a second request right after.
     clearTimeout(searchTimer);
     loadClients();
 }

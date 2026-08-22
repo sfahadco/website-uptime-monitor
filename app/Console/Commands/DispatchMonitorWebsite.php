@@ -21,6 +21,8 @@ class DispatchMonitorWebsite extends Command
         $pending = [];
         $batches = 0;
 
+        // Only ids, read a chunk at a time, so memory stays flat no matter how
+        // big the table gets. Jobs are collected and pushed in groups.
         Website::query()->select('id')->chunkById(
             $batchSize,
             function ($chunk) use (&$pending, &$batches, $dispatchChunk) {
@@ -34,6 +36,7 @@ class DispatchMonitorWebsite extends Command
             }
         );
 
+        // Whatever did not fill a full group.
         $this->push($pending);
 
         $this->info(sprintf('%s jobs queued.', $batches));
@@ -42,12 +45,7 @@ class DispatchMonitorWebsite extends Command
     }
 
     /**
-     * Push a group of jobs in a single queue round trip.
-     *
-     * At full scale a cycle produces dozens of batch jobs, and dispatching them
-     * one at a time is one Redis round trip each. `Queue::bulk` sends the whole
-     * group at once, so the dispatcher's own cost stays negligible next to the
-     * fifteen-minute window it has to finish in.
+     * Sends the whole group in one queue round trip instead of one each.
      *
      * @param  list<MonitorWebsiteBatchJob>  $jobs
      */
@@ -57,6 +55,8 @@ class DispatchMonitorWebsite extends Command
             return;
         }
 
+        // A bulk push skips the job dispatcher, so the queue name has to be
+        // given here -- the job's own onQueue() is ignored.
         Queue::bulk($jobs, '', 'monitoring');
     }
 }

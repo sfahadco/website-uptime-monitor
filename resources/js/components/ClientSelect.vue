@@ -3,8 +3,8 @@ import { computed, nextTick, ref } from 'vue';
 
 const props = defineProps({
     clients: { type: Array, required: true },
-    // Total matching the current query across all pages, not just the options
-    // rendered below -- that gap is what the status line has to explain.
+    // Matches across all pages, not just the options shown. The status line
+    // exists to explain that gap.
     total: { type: Number, default: 0 },
     modelValue: { type: Number, default: null },
     loading: { type: Boolean, default: false },
@@ -13,9 +13,8 @@ const props = defineProps({
 
 const emit = defineEmits(['update:modelValue', 'search', 'retry']);
 
-// The typed text lives here rather than in the parent: it doubles as the
-// display value for the current selection, which is not something the parent's
-// search term should be responsible for.
+// Kept here, not in the parent, because it doubles as the display value for
+// the chosen client -- not a job the parent's search term should have.
 const query = ref('');
 const open = ref(false);
 const activeIndex = ref(-1);
@@ -89,6 +88,8 @@ function move(step) {
         return;
     }
 
+    // + count before the modulo so stepping up from the first option wraps to
+    // the last instead of going negative.
     activeIndex.value = (activeIndex.value + step + count) % count;
 
     nextTick(() => {
