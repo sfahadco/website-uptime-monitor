@@ -8,11 +8,17 @@ Built with Laravel 12 (PHP 8.5), Vue 3, MySQL 8.4 and Redis 8, all in Docker.
 
 ## Quickstart
 
-The only thing you need installed is **Docker** with the Compose v2 plugin.
-PHP, Composer, Node and MySQL all run in containers.
+The only thing you need installed is **Docker** with the Compose v2 plugin --
+[Docker Desktop](https://docs.docker.com/get-started/get-docker/) on macOS and
+Windows includes it, and on Linux it comes with
+[Docker Engine](https://docs.docker.com/engine/install/). PHP, Composer, Node
+and MySQL all run in containers; nothing else is installed on your machine.
+
+`./bin/setup` checks for both before it does anything, and tells you what is
+missing if either is absent.
 
 ```bash
-git clone <repo-url> && cd website-uptime-monitor
+git clone git@github.com:sfahadco/website-uptime-monitor.git && cd website-uptime-monitor
 ./bin/setup
 ```
 
