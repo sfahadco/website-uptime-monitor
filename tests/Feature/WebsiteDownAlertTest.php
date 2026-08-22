@@ -7,6 +7,7 @@ use App\Jobs\MonitorWebsiteBatchJob;
 use App\Mail\WebsiteDownEmail;
 use App\Models\Website;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Env;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Mail;
 use PHPUnit\Framework\Attributes\DataProvider;
@@ -89,7 +90,7 @@ class WebsiteDownAlertTest extends TestCase
 
         Mail::assertQueued(WebsiteDownEmail::class, function (WebsiteDownEmail $mail) {
             $mail->assertHasSubject('https://example.test is down!');
-            $mail->assertSeeInText('https://example.test is down!');
+            $mail->assertSeeInHtml('https://example.test is down!');
 
             return true;
         });
@@ -112,6 +113,29 @@ class WebsiteDownAlertTest extends TestCase
         $from = $messages[0]->getOriginalMessage()->getFrom();
 
         $this->assertSame('do-not-reply@example.com', $from[0]->getAddress());
+    }
+
+    /**
+     * The assertion above only proves the address `.env.testing` happens to
+     * supply. The no-reply sender has to hold in an environment that never sets
+     * `MAIL_FROM_ADDRESS`, so check the shipped default with the variable gone.
+     */
+    public function test_the_no_reply_sender_does_not_depend_on_the_environment(): void
+    {
+        $repository = Env::getRepository();
+        $original = $repository->get('MAIL_FROM_ADDRESS');
+
+        $repository->clear('MAIL_FROM_ADDRESS');
+
+        try {
+            $config = require config_path('mail.php');
+        } finally {
+            if ($original !== null) {
+                $repository->set('MAIL_FROM_ADDRESS', $original);
+            }
+        }
+
+        $this->assertSame('do-not-reply@example.com', $config['from']['address']);
     }
 
     private function runJobFor(Website $website): void
