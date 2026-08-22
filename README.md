@@ -47,9 +47,9 @@ straight away rather than waiting:
 docker compose logs -f queue        # watch it run
 ```
 
-A pass takes about ten seconds, because the seed data deliberately includes
-hosts that will never resolve. Those failures are what produce the alert emails
-in Mailpit.
+A pass over the full seed data takes a minute or two on one worker. Most of the
+seeded hosts will never resolve, and those failures are what produce the alert
+emails in Mailpit.
 
 > **Note:** the dashboard lists each client's websites but does not yet display
 > their up/down status -- `/api/clients/{client}/websites` returns only `id` and
@@ -65,10 +65,22 @@ being monitored for them, and click one to open it after a confirmation prompt.
 outgoing email is caught here instead of being delivered, so you can read the
 down-alerts without configuring a mail provider.
 
-The seed data ([`MonitoringSeeder`](database/seeders/MonitoringSeeder.php)) sets
-up three clients with seven websites between them -- a deliberate mix of
-reachable hosts and hosts that will never resolve, so both the up and down paths
-are exercised on the first pass and at least one alert email lands in Mailpit.
+The seed data ([`MonitoringSeeder`](database/seeders/MonitoringSeeder.php)) is
+sized to the brief's target scale -- **303 clients and 1,657 websites**, from a
+mix of two sources:
+
+- **Three demo clients** with seven hand-picked, real URLs between them. A
+  deliberate mix of reachable hosts and hosts that will never resolve, so both
+  the up and down paths are exercised on the first pass and a real alert email
+  lands in Mailpit.
+- **300 generated clients** with one to ten websites each, under the reserved
+  `.example.com` domain so nothing can ever point a check at a real server.
+  These exist to put realistic volume behind the dispatcher, the batch jobs and
+  the paginated client list.
+
+Re-seeding is a no-op: every generated row is derived from its client index, so
+`./bin/setup` can run repeatedly without piling up duplicate clients. Set
+`MONITOR_SEED_CLIENTS` lower for a faster setup, or higher for a load test.
 
 ## How the monitoring works
 
@@ -87,12 +99,22 @@ they ride a separate `alerts` queue that is drained ahead of `monitoring`.
 
 | Method | Path | Returns |
 |---|---|---|
-| `GET` | `/api/clients` | every client, as `id` and `email` |
+| `GET` | `/api/clients` | a page of clients, as `id` and `email`, plus a `meta` block |
 | `GET` | `/api/clients/{client}/websites` | that client's websites, as `id` and `url` |
 | `GET` | `/up` | Laravel health check |
 
-Both list endpoints are unpaginated, which suits the select-one-client UI at this
-scale. Neither returns the monitored `status` -- see the note above.
+`/api/clients` is paginated and searchable, because at hundreds of clients
+neither a full response nor a `<select>` of every option is workable:
+
+| Query | Default | Meaning |
+|---|---|---|
+| `search` | – | case-insensitive substring match on the email |
+| `page` | `1` | page number |
+| `per_page` | `50` | rows per page, capped at 100 |
+
+`/api/clients/{client}/websites` is deliberately *not* paginated -- a client is
+capped at ten websites, so the response is bounded by the data model. Neither
+endpoint returns the monitored `status` -- see the note above.
 
 ## Tests
 
@@ -132,9 +154,16 @@ knowing:
 | Variable | Default | Meaning |
 |---|---|---|
 | `MONITOR_TIMEOUT` | `10` | seconds before a check counts as down |
-| `MONITOR_BATCH_SIZE` | `25` | websites checked per queued job |
+| `MONITOR_BATCH_SIZE` | `50` | websites checked concurrently per queued job |
+| `MONITOR_JOB_TIMEOUT` | `120` | seconds a batch job may run before it is killed |
+| `MONITOR_SEED_CLIENTS` | `300` | generated clients the seeder creates |
+| `MONITOR_SEED_MAX_WEBSITES` | `10` | most websites any generated client gets |
 | `APP_PORT` | `8000` | host port for the dashboard |
 | `MAILPIT_UI_PORT` | `8025` | host port for Mailpit |
+
+`MONITOR_BATCH_SIZE` and `MONITOR_JOB_TIMEOUT` are linked -- a bigger batch means
+a longer tail inside one job. See
+[Sizing a cycle](DECISIONS.md#sizing-a-cycle) before changing either.
 
 ## Design notes
 

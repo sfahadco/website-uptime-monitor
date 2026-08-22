@@ -1,21 +1,71 @@
 <script setup>
-defineProps({
+import { computed } from 'vue';
+
+const props = defineProps({
     clients: { type: Array, required: true },
+    // Total matching the current search across all pages, not just the ones
+    // rendered below -- that gap is what the status line has to explain.
+    total: { type: Number, default: 0 },
+    search: { type: String, default: '' },
     modelValue: { type: Number, default: null },
     loading: { type: Boolean, default: false },
     error: { type: String, default: null },
 });
 
-const emit = defineEmits(['update:modelValue', 'retry']);
+const emit = defineEmits(['update:modelValue', 'search', 'retry']);
+
+const isSearching = computed(() => props.search.trim() !== '');
+
+const hasMoreThanShown = computed(() => props.total > props.clients.length);
+
+const statusMessage = computed(() => {
+    if (props.loading) {
+        return 'Loading clients…';
+    }
+
+    if (props.error !== null) {
+        return '';
+    }
+
+    if (props.clients.length === 0) {
+        return isSearching.value
+            ? `No clients match “${props.search.trim()}”.`
+            : 'No clients are set up yet.';
+    }
+
+    if (hasMoreThanShown.value) {
+        return `Showing ${props.clients.length} of ${props.total} clients — search to narrow the list.`;
+    }
+
+    return `${props.total} client${props.total === 1 ? '' : 's'}.`;
+});
 
 function onChange(event) {
     emit('update:modelValue', Number(event.target.value));
+}
+
+function onSearch(event) {
+    emit('search', event.target.value);
 }
 </script>
 
 <template>
     <section>
-        <label for="client-select" class="block text-sm font-medium text-gray-900">
+        <label for="client-search" class="block text-sm font-medium text-gray-900">
+            Find a client
+        </label>
+
+        <input
+            id="client-search"
+            type="search"
+            autocomplete="off"
+            placeholder="Search by email…"
+            class="mt-2 block w-full rounded-md border border-gray-300 bg-white px-3 py-2 text-base text-gray-900 shadow-sm focus:border-gray-900 focus:ring-1 focus:ring-gray-900 focus:outline-none"
+            :value="search"
+            @input="onSearch"
+        >
+
+        <label for="client-select" class="mt-4 block text-sm font-medium text-gray-900">
             Client
         </label>
 
@@ -35,8 +85,7 @@ function onChange(event) {
         </select>
 
         <p id="client-select-status" role="status" class="mt-2 min-h-5 text-sm text-gray-600">
-            <span v-if="loading">Loading clients…</span>
-            <span v-else-if="!error && clients.length === 0">No clients are set up yet.</span>
+            {{ statusMessage }}
         </p>
 
         <div v-if="error" role="alert" class="mt-2 rounded-md border border-red-300 bg-red-50 p-3">

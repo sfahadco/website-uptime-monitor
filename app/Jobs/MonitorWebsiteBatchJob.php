@@ -20,7 +20,7 @@ class MonitorWebsiteBatchJob implements ShouldQueue
 
     public int $tries = 2;
 
-    public int $timeout = 60;
+    public int $timeout;
 
     // Mark job failed when job is timeout
     public bool $failOnTimeout = true;
@@ -31,6 +31,8 @@ class MonitorWebsiteBatchJob implements ShouldQueue
     public function __construct(public array $websiteIds)
     {
         $this->onQueue('monitoring');
+
+        $this->timeout = (int) config('monitoring.job_timeout');
     }
 
     /**
@@ -51,27 +53,57 @@ class MonitorWebsiteBatchJob implements ShouldQueue
                 ->get($website->url))
             ->all());
 
+        $idsByStatus = [];
+        $outages = [];
+
         foreach ($websites as $website) {
-            $this->record($website, $responses[(string)$website->id] ?? null);
+            $current = $this->statusFor($responses[(string) $website->id] ?? null);
+
+            $idsByStatus[$current->value][] = $website->id;
+
+            // One alert per outage, not one per failed check.
+            if ($current->isNewOutageFrom($website->status)) {
+                $outages[] = $website;
+            }
+        }
+
+        // Statuses are written before any alert goes out, so a mail failure can
+        // never leave the batch's results unrecorded.
+        $this->persist($idsByStatus);
+
+        foreach ($outages as $website) {
+            $this->notifyClient($website);
         }
     }
 
-    private function record(Website $website, Response|Throwable|null $result): void
+    private function statusFor(Response|Throwable|null $result): WebsiteStatusEnum
     {
-        $current = $result instanceof Response && $result->successful()
+        return $result instanceof Response && $result->successful()
             ? WebsiteStatusEnum::UP
             : WebsiteStatusEnum::DOWN;
+    }
 
-        $previous = $website->status;
+    /**
+     * One UPDATE per distinct status rather than one per website.
+     *
+     * A batch only ever produces UP or DOWN, so this is at most two statements
+     * regardless of batch size -- where saving each model individually cost one
+     * write per site, or thousands of round trips per cycle at full scale.
+     *
+     * @param  array<string, list<int>>  $idsByStatus
+     */
+    private function persist(array $idsByStatus): void
+    {
+        $now = now();
 
-        $website->forceFill([
-            'status' => $current,
-            'last_checked_at' => now(),
-        ])->save();
-
-        // One alert per outage, not one per failed check.
-        if ($current->isNewOutageFrom($previous)) {
-            $this->notifyClient($website);
+        foreach ($idsByStatus as $status => $ids) {
+            Website::query()->whereIn('id', $ids)->update([
+                'status' => $status,
+                'last_checked_at' => $now,
+                // Mass updates bypass the model's timestamp handling, so
+                // updated_at has to be set explicitly.
+                'updated_at' => $now,
+            ]);
         }
     }
 
