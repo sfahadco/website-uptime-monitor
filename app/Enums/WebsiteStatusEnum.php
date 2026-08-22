@@ -12,4 +12,9 @@ enum WebsiteStatusEnum: string
     {
         return array_column(self::cases(), 'value');
     }
+
+    public function isNewOutageFrom(?self $previous): bool
+    {
+        return $this === self::DOWN && $previous !== self::DOWN;
+    }
 }

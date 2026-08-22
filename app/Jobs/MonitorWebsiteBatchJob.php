@@ -69,8 +69,8 @@ class MonitorWebsiteBatchJob implements ShouldQueue
             'last_checked_at' => now(),
         ])->save();
 
-        // Sending email only when website status transition to "Down"
-        if ($current === WebsiteStatusEnum::DOWN && $previous !== WebsiteStatusEnum::DOWN) {
+        // One alert per outage, not one per failed check.
+        if ($current->isNewOutageFrom($previous)) {
             $this->notifyClient($website);
         }
     }
