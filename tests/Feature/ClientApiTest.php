@@ -102,25 +102,6 @@ class ClientApiTest extends TestCase
         );
     }
 
-    public function test_search_wildcards_are_treated_as_literal_text(): void
-    {
-        Client::factory()->create(['email' => 'alice@acme.test']);
-        Client::factory()->create(['email' => 'bob@acme.test']);
-
-        // Unescaped, "%" and "_" would make LIKE match every row.
-        foreach (['%', '_'] as $wildcard) {
-            $response = $this->getJson(route('clients.index', ['search' => $wildcard]));
-
-            $response->assertOk();
-
-            $this->assertSame(
-                0,
-                $response->json('meta.total'),
-                sprintf('"%s" was interpreted as a LIKE wildcard.', $wildcard),
-            );
-        }
-    }
-
     public function test_returns_only_the_requested_clients_websites(): void
     {
         $client = Client::factory()

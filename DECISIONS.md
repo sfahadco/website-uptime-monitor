@@ -276,19 +276,47 @@ user the list it is showing is not the whole list.
 
 Filtering is server-side rather than in the browser, and that follows directly
 from paginating: the frontend deliberately never holds the full set, so a
-client-side filter could only ever filter the page it already has. The search
-input is debounced by 300ms and shares the same in-flight-request guard as the
-website list, since a debounced search can still have two requests racing and
-the slower one must not overwrite the newer.
+client-side filter could only ever filter the page it already has. The search is
+debounced by 300ms and shares the same in-flight-request guard as the website
+list, since a debounced search can still have two requests racing and the slower
+one must not overwrite the newer.
 
-Two smaller notes. The query orders by `email` -- pagination is only coherent
-over a total, stable sort, and `email` is unique so it makes one on its own.
-And the search term has its `%`, `_` and `\` escaped before it reaches `LIKE`,
-or a search for `%` would match every client rather than none.
+The query orders by `email` -- pagination is only coherent over a total, stable
+sort, and `email` is unique so it makes one on its own.
 
 `GET /api/clients/{client}/websites` is deliberately *not* paginated. The brief
 caps a client at ten websites, so that response is bounded by the data model
 itself and a page size would be ceremony around a list that cannot grow.
+
+---
+
+## The client picker is a combobox, not a `<select>`
+
+`ClientSelect.vue` is a text input with its own listbox rather than a native
+`<select>`, because searching and selecting have to be the same control. A
+search box sitting *above* a `<select>` reads as two separate widgets and
+invites the obvious question of why the select does not just search.
+
+A native `<select>` cannot hold a text input, so this is hand-rolled: `<input
+role="combobox">` over a `<ul role="listbox">`, wired with `aria-expanded`,
+`aria-controls` and `aria-activedescendant`, arrow keys to move, Enter to
+choose, Escape to dismiss. Picking an option writes that client's email into the
+input, which is what makes it read as a filled-in select rather than a search
+box that happens to have results underneath.
+
+Two details that are easy to get wrong. Dismissal listens for `focusout` on the
+wrapper and checks `relatedTarget`, because clicking an option moves focus
+*inside* the component and that must not count as leaving it; options also
+`@mousedown.prevent` so the input keeps focus through the click. And the typed
+text lives in the component rather than in `App.vue`, because it doubles as the
+display value for the current selection -- which is not a job the parent's
+search term should have. The parent still owns the fetching; the component only
+emits what was typed.
+
+The cost is roughly eighty lines of behaviour that a native element would have
+given for free, and a keyboard and screen-reader surface that is now this
+project's problem rather than the browser's. A headless combobox library would
+have covered it, but for one control on one screen it is not worth a dependency.
 
 ---
 

@@ -186,7 +186,6 @@ onMounted(loadClients);
         <ClientSelect
             :clients="clients"
             :total="clientsTotal"
-            :search="clientSearch"
             :model-value="selectedClientId"
             :loading="clientsLoading"
             :error="clientsError"
