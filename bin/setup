@@ -210,7 +210,22 @@ step "Migrating and seeding the database"
 if [ "$FRESH" -eq 1 ]; then
     app php artisan migrate:fresh --seed --force
 else
-    app php artisan migrate --force
+    # A migration can fail against a database that predates the current set:
+    # tables that exist but that the `migrations` table does not record, left
+    # behind when a migration is renamed or replaced. The error MySQL gives back
+    # is "table already exists", which says nothing about the way out.
+    #
+    # A fresh clone cannot hit this -- empty volume, every migration runs in one
+    # batch. Only a long-lived development database does, so the fix is named
+    # here rather than guarded against.
+    if ! app php artisan migrate --force; then
+        printf '\n      %sThe database has tables the migration history does not account for.%s\n' "$YELLOW" "$RESET"
+        printf '      %sUsually a migration was renamed or replaced after it had already run.%s\n\n' "$DIM" "$RESET"
+        printf '      Rebuild the database from scratch with:\n\n'
+        printf '          %s./bin/setup --fresh%s   %sdrops every table, migrates, re-seeds%s\n\n' "$BOLD" "$RESET" "$DIM" "$RESET"
+        die "migration failed against the existing database"
+    fi
+
     app php artisan db:seed --force
 fi
 
