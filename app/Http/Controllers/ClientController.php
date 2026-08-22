@@ -5,7 +5,6 @@ namespace App\Http\Controllers;
 use App\Models\Client;
 use App\Repository\ClientRepository;
 use Illuminate\Http\JsonResponse;
-use Illuminate\Http\Request;
 
 class ClientController extends Controller
 {
@@ -13,13 +12,9 @@ class ClientController extends Controller
     {
 
     }
-    public function index(Request $request): JsonResponse
+    public function index(): JsonResponse
     {
-        $validated = $request->validate([
-            'text_search' => ['nullable', 'string', 'max:255'],
-        ]);
-
-        $clients = $this->clientRepository->get($validated);
+        $clients = $this->clientRepository->get();
 
         return response()->json($clients);
     }

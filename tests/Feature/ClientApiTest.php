@@ -33,21 +33,20 @@ class ClientApiTest extends TestCase
         }
     }
 
-    public function test_filters_clients_by_email(): void
+    public function test_returns_every_client_without_a_limit(): void
     {
-        $match = Client::factory()->create(['email' => 'billing@acme.test']);
-        $other = Client::factory()->create(['email' => 'ops@globex.test']);
+        $clients = Client::factory()->count(25)->create();
 
-        $response = $this->getJson(route('clients.index', ['text_search' => 'acme.test']));
+        $response = $this->getJson(route('clients.index'));
 
         $response->assertOk();
 
-        $this->assertSame(
-            [$match->email],
+        $this->assertCount(25, $response->json());
+
+        $this->assertEqualsCanonicalizing(
+            $clients->pluck('email')->all(),
             array_column($response->json(), 'email'),
         );
-
-        $response->assertJsonMissing(['email' => $other->email]);
     }
 
     public function test_returns_only_the_requested_clients_websites(): void
