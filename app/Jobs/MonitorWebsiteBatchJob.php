@@ -94,10 +94,16 @@ class MonitorWebsiteBatchJob implements ShouldQueue
         }
     }
 
+    /**
+     * The batch itself gave up -- it exhausted `$tries` or ran past `$timeout`.
+     * This says nothing about whether the websites are up: none of them were
+     * recorded, so they keep their previous status until the next cycle picks
+     * them up fifteen minutes later.
+     */
     public function failed(Throwable $exception): void
     {
-        Log::error('Website is down', [
-            'website_id' => $this->websiteIds,
+        Log::error('Monitoring batch failed, websites left unchecked', [
+            'website_ids' => $this->websiteIds,
             'exception' => $exception->getMessage(),
         ]);
     }

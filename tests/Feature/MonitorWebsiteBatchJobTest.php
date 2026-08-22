@@ -5,7 +5,6 @@ namespace Tests\Feature;
 use App\Enums\WebsiteStatusEnum;
 use App\Jobs\MonitorWebsiteBatchJob;
 use App\Models\Website;
-use Database\Seeders\MonitoringSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Support\Facades\Http;
@@ -23,15 +22,13 @@ class MonitorWebsiteBatchJobTest extends TestCase
         parent::setUp();
 
         Mail::fake();
-
-        $this->seed(MonitoringSeeder::class);
     }
 
     public function test_marks_a_site_up_on_successful_response(): void
     {
         Http::fake(['*' => Http::response('OK')]);
 
-        $website = Website::find(1);
+        $website = Website::factory()->create();
 
         $this->runJobFor($website);
 
@@ -43,7 +40,7 @@ class MonitorWebsiteBatchJobTest extends TestCase
     {
         Http::fake(['*' => Http::response('', $statusCode)]);
 
-        $website = Website::find(1);
+        $website = Website::factory()->create();
 
         $this->runJobFor($website);
 
@@ -56,7 +53,7 @@ class MonitorWebsiteBatchJobTest extends TestCase
             'cURL error 28: Operation timed out after 10000 milliseconds'
         ));
 
-        $website = Website::find(1);
+        $website = Website::factory()->create();
 
         $this->runJobFor($website);
 
@@ -69,7 +66,7 @@ class MonitorWebsiteBatchJobTest extends TestCase
             'cURL error 6: Could not resolve host'
         ));
 
-        $website = Website::find(1);
+        $website = Website::factory()->create();
 
         $this->runJobFor($website);
 
@@ -81,11 +78,16 @@ class MonitorWebsiteBatchJobTest extends TestCase
     {
         Http::fake(['*' => Http::response('', $statusCode)]);
 
-        //Todo: document this
+        // Freeze the clock so the stamp can be asserted exactly. Truncated to
+        // the second because the column has no sub-second precision, and a
+        // microsecond difference would fail an otherwise correct comparison.
         $this->travelTo($now = now()->startOfSecond());
 
-        $website = Website::find(1);
-        $website->update(['last_checked_at' => null]);
+        // Seeded with a stale stamp rather than null, so the assertion proves
+        // this check *overwrote* the value instead of merely filling in a blank.
+        $website = Website::factory()->create([
+            'last_checked_at' => $now->copy()->subDay(),
+        ]);
 
         $this->runJobFor($website);
 
