@@ -19,7 +19,7 @@ class ClientApiTest extends TestCase
 
         $response->assertOk();
 
-        $content = $response->json();
+        $content = $response->json('data');
 
         $this->assertCount(3, $content);
 
@@ -33,19 +33,72 @@ class ClientApiTest extends TestCase
         }
     }
 
-    public function test_returns_every_client_without_a_limit(): void
+    public function test_it_caps_a_page_and_reports_the_full_total(): void
     {
-        $clients = Client::factory()->count(25)->create();
+        Client::factory()->count(120)->create();
 
         $response = $this->getJson(route('clients.index'));
 
         $response->assertOk();
 
-        $this->assertCount(25, $response->json());
+        // The page is bounded, but the client still learns how many rows exist
+        // so it can tell the user the list is not complete.
+        $this->assertCount(50, $response->json('data'));
+        $this->assertSame(120, $response->json('meta.total'));
+        $this->assertSame(3, $response->json('meta.last_page'));
+    }
+
+    public function test_it_pages_through_every_client_exactly_once(): void
+    {
+        $expected = Client::factory()->count(120)->create()->pluck('email')->all();
+
+        $seen = [];
+
+        for ($page = 1; $page <= 3; $page++) {
+            $response = $this->getJson(route('clients.index', ['page' => $page]));
+
+            $response->assertOk();
+
+            $seen = array_merge($seen, array_column($response->json('data'), 'email'));
+        }
+
+        $this->assertEqualsCanonicalizing($expected, $seen);
+    }
+
+    public function test_it_honours_a_requested_page_size(): void
+    {
+        Client::factory()->count(10)->create();
+
+        $response = $this->getJson(route('clients.index', ['per_page' => 4]));
+
+        $response->assertOk();
+
+        $this->assertCount(4, $response->json('data'));
+        $this->assertSame(4, $response->json('meta.per_page'));
+    }
+
+    public function test_it_rejects_a_page_size_above_the_ceiling(): void
+    {
+        $this->getJson(route('clients.index', ['per_page' => 500]))
+            ->assertUnprocessable()
+            ->assertJsonValidationErrors('per_page');
+    }
+
+    public function test_it_filters_clients_by_an_email_substring(): void
+    {
+        Client::factory()->create(['email' => 'alice@acme.test']);
+        Client::factory()->create(['email' => 'bob@acme.test']);
+        Client::factory()->create(['email' => 'alice@other.test']);
+
+        $response = $this->getJson(route('clients.index', ['search' => 'alice']));
+
+        $response->assertOk();
+
+        $this->assertSame(2, $response->json('meta.total'));
 
         $this->assertEqualsCanonicalizing(
-            $clients->pluck('email')->all(),
-            array_column($response->json(), 'email'),
+            ['alice@acme.test', 'alice@other.test'],
+            array_column($response->json('data'), 'email'),
         );
     }
 

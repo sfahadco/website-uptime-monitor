@@ -4,7 +4,11 @@ import ClientSelect from './components/ClientSelect.vue';
 import VisitConfirmDialog from './components/VisitConfirmDialog.vue';
 import WebsiteList from './components/WebsiteList.vue';
 
+const SEARCH_DEBOUNCE_MS = 300;
+
 const clients = ref([]);
+const clientsTotal = ref(0);
+const clientSearch = ref('');
 const clientsLoading = ref(false);
 const clientsError = ref(null);
 
@@ -14,6 +18,12 @@ const websitesLoading = ref(false);
 const websitesError = ref(null);
 
 const dialogTarget = ref(null);
+
+// Both lists guard against a slow reply overwriting a newer one: each request
+// takes an id, and only the newest id is allowed to write to the refs.
+let clientsRequestId = 0;
+let clientsController = null;
+let searchTimer = null;
 
 let websitesRequestId = 0;
 let websitesController = null;
@@ -51,17 +61,55 @@ async function fetchJson(url, signal) {
 }
 
 async function loadClients() {
+    const requestId = ++clientsRequestId;
+
+    clientsController?.abort();
+    const controller = new AbortController();
+    clientsController = controller;
+
     clientsLoading.value = true;
     clientsError.value = null;
 
+    const term = clientSearch.value.trim();
+    const url = term === ''
+        ? '/api/clients'
+        : `/api/clients?search=${encodeURIComponent(term)}`;
+
     try {
-        clients.value = await fetchJson('/api/clients');
+        const { data, meta } = await fetchJson(url, controller.signal);
+
+        if (requestId !== clientsRequestId) {
+            return;
+        }
+
+        clients.value = data;
+        clientsTotal.value = meta.total;
     } catch (error) {
+        if (error.name === 'AbortError' || requestId !== clientsRequestId) {
+            return;
+        }
+
         clients.value = [];
+        clientsTotal.value = 0;
         clientsError.value = error.message;
     } finally {
-        clientsLoading.value = false;
+        if (requestId === clientsRequestId) {
+            clientsLoading.value = false;
+        }
     }
+}
+
+function onSearchClients(term) {
+    clientSearch.value = term;
+
+    clearTimeout(searchTimer);
+    searchTimer = setTimeout(loadClients, SEARCH_DEBOUNCE_MS);
+}
+
+function onRetryClients() {
+    // Drop any pending debounce, or it fires a second request right after.
+    clearTimeout(searchTimer);
+    loadClients();
 }
 
 async function loadWebsites(clientId) {
@@ -140,11 +188,13 @@ onMounted(loadClients);
 
         <ClientSelect
             :clients="clients"
+            :total="clientsTotal"
             :model-value="selectedClientId"
             :loading="clientsLoading"
             :error="clientsError"
             @update:model-value="onSelectClient"
-            @retry="loadClients"
+            @search="onSearchClients"
+            @retry="onRetryClients"
         />
 
         <WebsiteList

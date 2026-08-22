@@ -14,7 +14,7 @@ the box is packaged, not a change to the architecture. Nothing in `app/`,
 `config/` or `routes/` knows it is in a container, so the same code drops onto
 a plain LAMP server unchanged.
 
-It is packaged this way because the application needs PHP 8.3 or newer, plus
+It is packaged this way because the application needs PHP 8.4.1 or newer, plus
 Redis and an SMTP catcher, and asking a reviewer to install all of that by hand
 on whatever machine they happen to use is slow and easy to get wrong. The brief
 asks that the project run "from a clean environment". With Docker that is
@@ -111,7 +111,8 @@ live service.
 not. PHPUnit puts its `<env>` entries into the process environment before
 Laravel boots, and Laravel will not overwrite an existing environment variable
 -- so `phpunit.xml` wins for the keys it lists, and `.env.testing` supplies the
-rest (`APP_KEY`, `MAIL_FROM_ADDRESS`, `MONITOR_TIMEOUT`, `MONITOR_BATCH_SIZE`).
+rest (`APP_KEY`, `MAIL_FROM_ADDRESS`, `MONITOR_TIMEOUT`, `MONITOR_BATCH_SIZE`,
+`MONITOR_JOB_TIMEOUT`).
 Two layers, both pointing the same way.
 
 `.env.testing` is committed, `APP_KEY` included. It is not a secret: it exists
@@ -140,6 +141,35 @@ workers. More websites is more queue containers, with no change to the code.
 so memory stays flat no matter how large the table grows. `withoutOverlapping()`
 stops a slow cycle from stacking on top of the next one.
 
+The jobs are handed to the queue with `Queue::bulk()` in groups of
+`dispatch_chunk` rather than dispatched one by one, so a cycle's 34 jobs cost
+one Redis round trip instead of 34. This is a small saving in absolute terms --
+the dispatcher was never the bottleneck -- but it keeps the scheduler's single
+task trivially short, which is the property the whole layering depends on. The
+one wrinkle is that a bulk push bypasses the job dispatcher, so the queue name
+has to be passed explicitly; the job's own `onQueue()` call is not consulted.
+
+---
+
+## Statuses are written per batch, not per website
+
+`MonitorWebsiteBatchJob` collects each site's outcome in memory, then issues one
+`UPDATE ... WHERE id IN (...)` per distinct status. A batch only ever produces
+UP or DOWN, so that is at most two writes however large the batch is.
+
+The obvious implementation -- `$website->save()` inside the loop -- costs one
+write per website instead. At the target scale that is around 1,650 individual
+UPDATE statements every fifteen minutes, all of them tiny, all of them a round
+trip to MySQL, to record two distinct values. Grouping them turns the cycle's
+write cost from "proportional to the number of websites" into "proportional to
+the number of batches", which is the shape that survives growth.
+
+Two consequences worth knowing about. Mass updates bypass Eloquent's timestamp
+handling, so `updated_at` is set explicitly in the payload rather than left to
+the model. And because the writes are grouped, they now happen *before* any
+alert is queued rather than interleaved with them -- which is strictly better:
+a mail failure can no longer leave part of the batch's results unrecorded.
+
 ---
 
 ## `Http::pool()` checks a batch concurrently
@@ -147,20 +177,55 @@ stops a slow cycle from stacking on top of the next one.
 `MonitorWebsiteBatchJob` sends all the requests in its batch at once instead of
 one after another.
 
-The numbers force it. A batch is 25 websites and the timeout is 10 seconds, so
-checking them in sequence is up to 250 seconds -- longer than the job's own
-60-second timeout, and slow enough that a few batches of dead sites would push
-the whole cycle past fifteen minutes. Sent together, the batch costs roughly one
-slow website rather than the sum of all of them.
-
-`batch_size` and `timeout` live in `config/monitoring.php` and are linked: the
-batch is sized to comfortably fit inside the job timeout when run concurrently.
-Raising the batch size without understanding that is how you get jobs timing
-out.
+The numbers force it. A batch is 50 websites and the timeout is 10 seconds, so
+checking them in sequence is up to 500 seconds -- longer than the job's own
+timeout, and slow enough that a few batches of dead sites would push the whole
+cycle past fifteen minutes. Sent together, the batch costs roughly one slow
+website rather than the sum of all of them.
 
 One more benefit: a pooled request that fails comes back as an exception object
 in the results array rather than being thrown. One dead website therefore cannot
 abort the rest of its batch -- every site in the batch is still recorded.
+
+---
+
+## Sizing a cycle
+
+Four settings are really one calculation, and changing one alone is how you get
+jobs killed mid-flight, cycles that overlap, or sites checked twice. The target
+scale is the brief's: hundreds of clients at up to ten websites each, so 1,657
+websites with the seed data.
+
+The chain is:
+
+- **A batch costs about one timeout, not fifty.** `Http::pool()` runs the batch
+  concurrently, so 50 sites at a 10-second timeout is ~10 seconds of wall clock
+  in the worst case where every one of them hangs, not 500.
+- **`job_timeout` (120s) must clear that with room to spare.** It covers the
+  10-second tail plus connection setup, the pool's overhead and the status
+  writes. 60 would have worked; 120 is deliberate slack, because a job killed at
+  the timeout records *nothing* and loses the whole batch.
+- **The queue's `retry_after` (180s) must be higher than `job_timeout`.** This is
+  the one that bites. If a job is still running when `retry_after` passes, Redis
+  hands it to a second worker and every site in the batch is checked twice --
+  and a flapping site can then send two alerts. It lives in `config/queue.php`,
+  not `config/monitoring.php`, which is exactly why it is easy to miss when
+  raising the job timeout.
+- **The cycle must fit in fifteen minutes.** 1,657 websites at 50 per batch is
+  34 jobs. One worker running them back to back at the ~10-second worst case is
+  ~6 minutes -- inside the window, with margin for slower checks and queue
+  latency.
+
+That worst case assumes *every* site hangs until timeout. Real cycles are much
+quicker: live sites answer in milliseconds and dead ones fail on DNS about as
+fast. A full seeded cycle measures around 40-90 seconds on one worker.
+
+Where it stops fitting: at roughly 4,500 websites a single worker's worst case
+crosses fifteen minutes, `withoutOverlapping()` starts skipping cycles, and the
+answer is workers rather than code -- `docker compose up -d --scale queue=N`
+divides the cycle by N. Raising `batch_size` instead trades one problem for
+another, since a larger pool means more concurrent sockets in one PHP process
+and a longer tail inside a single job timeout.
 
 ---
 
@@ -192,13 +257,78 @@ build artifact under `public/build`, and same-origin API calls -- so there is no
 CORS layer, no second web server, and no separate base URL to configure per
 environment. `vue-router` and Pinia are deliberately absent: the spec defines
 exactly one view, so a router would add a dependency and a catch-all route to
-resolve a single path, and the entire application state is four values --
-`clients`, `selectedClientId`, `websites` and `dialogTarget` -- which live as
-refs in `App.vue` and reach the three child components as props. A store would
-be indirection around something a single component already owns. `axios` is
-likewise omitted in favour of native `fetch` for two unauthenticated GETs, and
-the confirmation dialog uses the native `<dialog>` element, whose `showModal()`
-gives focus trapping, Esc-to-dismiss and a backdrop without a modal library.
+resolve a single path, and the application state is a handful of values --
+`clients`, `clientSearch`, `selectedClientId`, `websites` and `dialogTarget` --
+which live as refs in `App.vue` and reach the three child components as props. A
+store would be indirection around something a single component already owns.
+`axios` is likewise omitted in favour of native `fetch` for two unauthenticated
+GETs, and the confirmation dialog uses the native `<dialog>` element, whose
+`showModal()` gives focus trapping, Esc-to-dismiss and a backdrop without a
+modal library.
+
+---
+
+## `GET /api/clients` is paginated and searched server-side
+
+This endpoint used to return every client in a single array, and the test suite
+asserted that it did. That was the right call for a demo-sized table and the
+wrong one at the brief's scale: hundreds of rows serialised on every page load,
+and a `<select>` with hundreds of `<option>`s for the user to scroll through.
+
+So the endpoint now takes `search`, `page` and `per_page`, defaults to 50 rows,
+and caps `per_page` at 100 -- the cap matters, or a caller can simply ask for
+the whole table and undo the point of paginating. The response gained a `meta`
+block alongside `data` because the client needs the full `total` to tell the
+user the list it is showing is not the whole list.
+
+Filtering is server-side rather than in the browser, and that follows directly
+from paginating: the frontend deliberately never holds the full set, so a
+client-side filter could only ever filter the page it already has. The search is
+debounced by 300ms and shares the same in-flight-request guard as the website
+list, since a debounced search can still have two requests racing and the slower
+one must not overwrite the newer.
+
+The query orders by `email` -- pagination is only coherent over a total, stable
+sort, and `email` is unique so it makes one on its own.
+
+`GET /api/clients/{client}/websites` is deliberately *not* paginated. The brief
+says a client has up to ten websites, so the list is short and a page size would
+be ceremony around it.
+
+Worth being clear: nothing enforces that ten. There is no check constraint and
+no validation -- only the seeder sticks to it. So this is a bet on the product
+rule, not a guarantee from the schema. If clients ever get hundreds of sites,
+this endpoint needs paginating too.
+
+---
+
+## The client picker is a combobox, not a `<select>`
+
+`ClientSelect.vue` is a text input with its own listbox rather than a native
+`<select>`, because searching and selecting have to be the same control. A
+search box sitting *above* a `<select>` reads as two separate widgets and
+invites the obvious question of why the select does not just search.
+
+A native `<select>` cannot hold a text input, so this is hand-rolled: `<input
+role="combobox">` over a `<ul role="listbox">`, wired with `aria-expanded`,
+`aria-controls` and `aria-activedescendant`, arrow keys to move, Enter to
+choose, Escape to dismiss. Picking an option writes that client's email into the
+input, which is what makes it read as a filled-in select rather than a search
+box that happens to have results underneath.
+
+Two details that are easy to get wrong. Dismissal listens for `focusout` on the
+wrapper and checks `relatedTarget`, because clicking an option moves focus
+*inside* the component and that must not count as leaving it; options also
+`@mousedown.prevent` so the input keeps focus through the click. And the typed
+text lives in the component rather than in `App.vue`, because it doubles as the
+display value for the current selection -- which is not a job the parent's
+search term should have. The parent still owns the fetching; the component only
+emits what was typed.
+
+The cost is about a hundred lines of behaviour that a native element would have
+given for free, and a keyboard and screen-reader surface that is now this
+project's problem rather than the browser's. A headless combobox library would
+have covered it, but for one control on one screen it is not worth a dependency.
 
 ---
 
@@ -206,8 +336,8 @@ gives focus trapping, Esc-to-dismiss and a backdrop without a modal library.
 
 The spec says an email goes out "when a website is detected as down", which
 read literally means every check that finds a site unreachable. It does not:
-`MonitorWebsiteBatchJob::record()` sends only when the status *changes* into
-down (`$current === DOWN && $previous !== DOWN`).
+`MonitorWebsiteBatchJob` sends only when the status *changes* into down. The
+test is `WebsiteStatusEnum::isNewOutageFrom()` -- now DOWN, previously not.
 
 The scheduler runs `monitor:dispatch` every fifteen minutes, so the literal
 reading produces 96 identical emails per site per day for an outage nobody has
@@ -244,7 +374,7 @@ server would make the checks themselves slow -- the one thing that has to finish
 inside fifteen minutes. Queued, the job hands the email over and immediately
 carries on with the next website.
 
-The `try/catch` is there because a batch checks up to 25 websites belonging to
+The `try/catch` is there because a batch checks up to 50 websites belonging to
 different clients. One malformed address, or a mail service that is briefly
 down, would otherwise throw and abandon the rest of the batch -- so a mail
 problem would turn into a monitoring problem. Swallowing it means the failure is
@@ -297,9 +427,8 @@ container rather than asking for Node on the host, which keeps the promise made
 in "Why Docker containers" that versions are identical on every machine.
 
 Two details are worth knowing. It re-seeds on every run, which is why
-`MonitoringSeeder` uses `firstOrCreate` -- `clients.email` and
-`(client_id, url)` are both unique, so a plain insert would fail the second time
-round. And it checks the published ports before building anything, because a
+`MonitoringSeeder` is written to be idempotent -- see the next section. And it
+checks the published ports before building anything, because a
 host that already has MySQL on 3306 is common and the alternative is an opaque
 bind error several minutes into the build.
 
@@ -308,3 +437,66 @@ The cost is a script that duplicates knowledge already present in
 change without it. It is worth that: the reviewer's first five minutes are the
 ones most likely to end in a wrong conclusion about the project.
 
+
+---
+
+## Seed data: a few real clients, then hundreds of generated ones
+
+`MonitoringSeeder` writes two kinds of data, because they answer two different
+questions.
+
+Three **demo clients** carry hand-written, genuinely resolving URLs
+(`laravel.com`, `vuejs.org`) alongside genuinely unresolvable ones. They exist
+so the first cycle produces real UP *and* DOWN rows and puts a real alert in
+Mailpit -- proof the monitor works, which a table of uniform failures would not
+give. At seven rows they are written with `firstOrCreate`, one at a time; the
+extra queries cost nothing and the readability is worth having.
+
+Then ~300 **generated clients** with one to ten websites each, ~1,650 rows in
+total, matching the brief's stated scale. These exist to prove the system works
+*at volume*: they are what puts a realistic number of rows behind the
+dispatcher's `chunkById`, the batch jobs, and the paginated client list. Without
+them every scale decision above is an untested assertion.
+
+Three choices in there are load-bearing:
+
+**Everything is derived from the client's index, not from Faker.** This is what
+makes re-seeding a no-op. `bin/setup` re-seeds on every run, and the same run
+produces the same emails and the same URLs, so `insertOrIgnore` collides with
+the rows already there and writes nothing. Random data would instead add a fresh
+three hundred clients every time anyone ran setup twice.
+
+**The generated hosts live under `.example.com`,** which RFC 2606 reserves.
+Nothing the seeder invents can resolve to somebody's real server, so a seeded
+database can never point 1,650 concurrent checks at a third party.
+
+**And they are seeded `down`, not `unknown`.** Partly because `down` is simply
+true -- those hosts cannot resolve, by construction -- but mostly because
+alerting keys off a transition *into* down. Seeded as `unknown`, the first cycle
+would be an `unknown -> down` transition for all 1,650 rows and would queue that
+many alert emails at once, burying the handful of real ones in Mailpit. Seeded
+`down`, the first cycle confirms rather than transitions and sends nothing. The
+demo clients deliberately keep the default, so their genuine outages still
+produce a genuine alert.
+
+`last_checked_at` stays null on the generated rows: their status is known from
+the start, but nothing has actually checked them.
+
+The alternative considered was pointing the generated sites at real hosts.
+Public testing endpoints do exist for this (`httpstat.us`, `httpbin.org`), but
+1,650 sites on a fifteen-minute cycle is 6,600 requests an hour to somebody
+else's free service -- which is abuse, and would be rate-limited into producing
+fake failures anyway. Doing it properly means self-hosting the targets, e.g. a
+`go-httpbin` container on the compose network. That is a real improvement and a
+larger change than the seeder; it is not done here.
+
+**The writes are bulk `insertOrIgnore` in chunks,** not `firstOrCreate` per row.
+Row-at-a-time would be some 1,950 round trips; chunked it is a handful, and the
+whole seed lands in about 250ms. The chunk sizes are set below SQLite's bind
+parameter limit so the seeder behaves identically in the test suite and against
+MySQL.
+
+Volume is configurable via `MONITOR_SEED_CLIENTS` and
+`MONITOR_SEED_MAX_WEBSITES` for anyone who wants a faster `bin/setup` or a
+larger load test, but it defaults to full scale -- demo data that quietly
+understates the target scale is how scale problems reach production.

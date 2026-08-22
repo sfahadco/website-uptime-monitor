@@ -7,6 +7,8 @@ use App\Jobs\MonitorWebsiteBatchJob;
 use App\Models\Website;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Client\ConnectionException;
+use Illuminate\Support\Facades\Config;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Mail;
 use PHPUnit\Framework\Attributes\DataProvider;
@@ -115,6 +117,70 @@ class MonitorWebsiteBatchJobTest extends TestCase
 
         $this->assertSame(WebsiteStatusEnum::DOWN, $broken->fresh()->status);
         $this->assertSame(WebsiteStatusEnum::UP, $healthy->fresh()->status);
+    }
+
+    public function test_it_writes_the_whole_batch_in_one_update_per_status(): void
+    {
+        Http::fake([
+            'https://up-*' => Http::response('OK'),
+            '*' => Http::response('', 503),
+        ]);
+
+        $websites = collect(range(1, 5))
+            ->map(fn (int $n) => Website::factory()->create(['url' => "https://up-{$n}.test"]))
+            ->merge(collect(range(1, 5))->map(
+                fn (int $n) => Website::factory()->create(['url' => "https://down-{$n}.test"])
+            ));
+
+        $updates = 0;
+
+        DB::listen(function ($query) use (&$updates) {
+            if (str_starts_with(strtolower(ltrim($query->sql)), 'update')) {
+                $updates++;
+            }
+        });
+
+        new MonitorWebsiteBatchJob($websites->pluck('id')->all())->handle();
+
+        // Ten websites, two outcomes, two writes. Saving each model separately
+        // would be ten -- and thousands across a full cycle.
+        $this->assertSame(2, $updates);
+
+        $this->assertSame(
+            5,
+            Website::query()->where('status', WebsiteStatusEnum::UP)->count(),
+        );
+
+        $this->assertSame(
+            5,
+            Website::query()->where('status', WebsiteStatusEnum::DOWN)->count(),
+        );
+    }
+
+    public function test_it_writes_once_when_the_batch_shares_one_outcome(): void
+    {
+        Http::fake(['*' => Http::response('OK')]);
+
+        $websites = Website::factory()->count(5)->create();
+
+        $updates = 0;
+
+        DB::listen(function ($query) use (&$updates) {
+            if (str_starts_with(strtolower(ltrim($query->sql)), 'update')) {
+                $updates++;
+            }
+        });
+
+        new MonitorWebsiteBatchJob($websites->pluck('id')->all())->handle();
+
+        $this->assertSame(1, $updates);
+    }
+
+    public function test_its_timeout_comes_from_config(): void
+    {
+        Config::set('monitoring.job_timeout', 99);
+
+        $this->assertSame(99, new MonitorWebsiteBatchJob([])->timeout);
     }
 
     /**

@@ -6,7 +6,6 @@ use App\Models\Website;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Mail\Mailable;
-use Illuminate\Mail\Mailables\Attachment;
 use Illuminate\Mail\Mailables\Content;
 use Illuminate\Mail\Mailables\Envelope;
 use Illuminate\Queue\SerializesModels;
@@ -20,6 +19,8 @@ class WebsiteDownEmail extends Mailable implements ShouldQueue
      */
     public function __construct(public Website $website)
     {
+        // Its own queue, drained ahead of `monitoring`, so an alert does not
+        // wait behind a backlog of check jobs.
         $this->onQueue('alerts');
     }
 
